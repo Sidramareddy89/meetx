@@ -15,7 +15,21 @@
  * the REAL `src/hooks/useSpeechToText.ts` runs unmodified.
  */
 
+/**
+ * One hook store per component instance. A test that renders a parent provider
+ * and a child component SEPARATELY (instead of nesting them) switches between
+ * named instances so their hook slots cannot collide.
+ */
+const instances = new Map();
+let activeName = 'default';
 let instance = { hooks: [], mounted: true };
+const activate = (name) => {
+  activeName = name;
+  if (!instances.has(name)) instances.set(name, { hooks: [], mounted: true });
+  instance = instances.get(name);
+  return instance;
+};
+activate('default');
 let renderContext = null;
 let lastResult = undefined;
 
@@ -107,6 +121,18 @@ export const __hookTest = {
     lastResult = result;
     return result;
   },
+  /**
+   * Make a context value visible to `useContext` for components rendered
+   * afterwards, exactly like React's nearest-Provider lookup. Used when a test
+   * mounts a child component separately from its real provider.
+   */
+  provideContext(contextObject, value) {
+    contextStack.push(new Map([[contextObject, value]]));
+  },
+  /** Drop any provided context values (no provider above this component). */
+  clearContext() {
+    contextStack.length = 0;
+  },
   /** Unmount: run every effect cleanup (React's unmount semantics). */
   unmount() {
     for (const slot of instance.hooks) {
@@ -117,10 +143,22 @@ export const __hookTest = {
     }
     instance.mounted = false;
   },
-  /** Fresh component instance. */
+  /** Fresh component instance (the active one). */
   reset() {
-    instance = { hooks: [], mounted: true };
+    instances.set(activeName, { hooks: [], mounted: true });
+    instance = instances.get(activeName);
     lastResult = undefined;
+  },
+  /**
+   * Render the next component under its OWN hook store, so a child rendered
+   * separately from its real provider does not reuse the provider's hook slots.
+   */
+  useInstance(name) {
+    return activate(name);
+  },
+  /** Back to the instance the test started with. */
+  defaultInstance() {
+    return activate('default');
   },
   lastResult: () => lastResult,
 };

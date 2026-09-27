@@ -102,7 +102,7 @@ interface MeetingContextType {
   isThinking: boolean;
 }
 
-const MeetingContext = createContext<MeetingContextType | undefined>(undefined);
+export const MeetingContext = createContext<MeetingContextType | undefined>(undefined);
 
 export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentUser } = useAuth();
