@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Phase 4 Service Test Harness</title>
+</head>
+
+<body>
+    <h1>Phase 4 — service layer test harness</h1>
+    <p id="status">Running... watch the console for PHASE4-TEST output.</p>
+    <script type="module">
+        import {
+            uploadMeetingResourceFile,
+            saveMeeting,
+            getMeetingById,
+            getUserMeetings
+        } from '/src/services/meetingService.ts';
+
+        const log = (step, payload) => {
+            console.log('PHASE4-TEST ' + step, JSON.stringify(payload));
+        };
+
+        // Deterministic demo uid — must match AuthContext.demoUidForEmail('svc.test@meetx.dev')
+        const demoUidForEmail = (email) => {
+            const normalized = (email || 'user').trim().toLowerCase();
+            let hash = 5381;
+            for (let i = 0; i < normalized.length; i++) {
+                hash = (hash * 33) ^ normalized.charCodeAt(i);
+            }
+            return 'demo-' + (hash >>> 0).toString(36) + '-' + normalized.replace(/[^a-z0-9]/g, '');
+        };
+        const userId = demoUidForEmail('svc.test@meetx.dev');
+
+        try {
+            // STEP 1: create a real File and upload it (Storage if configured, dataURL fallback otherwise)
+            const fileContent = 'Phase 4 test resource: MEETX verification document.';
+            const file = new File([fileContent], 'phase4-verify.txt', { type: 'text/plain' });
+            const meetingId = 'meet-' + Date.now();
+            const resource = await uploadMeetingResourceFile(userId, meetingId, file);
+            log('UPLOAD_OK', {
+                name: resource.name,
+                size: resource.size,
+                type: resource.type,
+                hasUrl: Boolean(resource.url),
+                urlKind: resource.url ? (resource.url.startsWith('data:') ? 'dataUrl' : 'https') : 'none'
+            });
+
+            // STEP 2: save meeting metadata associated with the user
+            const saved = await saveMeeting(
+                userId,
+                {
+                    title: 'Phase 4 Verification Meeting',
+                    platform: 'Google Meet',
+                    meetingLink: 'https://meet.google.com/phase4-test',
+                    topic: 'Phase 4 Verification Meeting',
+                    selectedLanguage: 'English (US)',
+                    pastedNotes: 'Verify persistence and user association.',
+                    resources: [resource],
+                    status: 'live',
+                    transcript: []
+                },
+                meetingId
+            );
+            log('SAVE_OK', { id: saved.id, userId: saved.userId, platform: saved.platform, resources: (saved.resources || []).length });
+
+            // STEP 3: retrieve by id + verify user association
+            const fetched = await getMeetingById(saved.id, userId);
+            log('RETRIEVE_SAME_USER', {
+                found: Boolean(fetched),
+                idMatch: fetched ? fetched.id === saved.id : false,
+                userMatch: fetched ? fetched.userId === userId : false,
+                title: fetched ? fetched.title : null,
+                resourceNames: fetched && fetched.resources ? fetched.resources.map((r) => r.name) : null
+            });
+
+            // STEP 4: cross-user association must FAIL (different user cannot read it)
+            const otherUser = demoUidForEmail('other.user@meetx.dev');
+            const crossRead = await getMeetingById(saved.id, otherUser);
+            log('CROSS_USER_DENIED', { found: crossRead === null });
+
+            // STEP 5: list meetings for the user — the saved meeting must appear
+            const list = await getUserMeetings(userId);
+            log('USER_LIST', {
+                count: list.length,
+                contains: list.some((m) => m.id === saved.id && m.userId === userId),
+                allSameUser: list.every((m) => m.userId === userId)
+            });
+
+            document.getElementById('status').textContent = 'DONE — check console (PHASE4-TEST lines).';
+            console.log('PHASE4-TEST DONE', JSON.stringify({ meetingId, userId }));
+        } catch (err) {
+            console.log('PHASE4-TEST FAIL', JSON.stringify({ error: String(err && err.message ? err.message : err) }));
+            document.getElementById('status').textContent = 'FAILED — check console.';
+        }
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# environment / secrets (VITE_* keys are bundled into the client — never commit)
+.env
+.env.local
+.env.*.local
+
+# stray typecheck artifact (use `npx tsc --noEmit` instead)
+tsc_check.txt
+
+# dev / tunnel logs
+*.log
+dev.log
+dev-err.log
+tunnel.log
+tunnel-err.log
+build.out.log
+build.err.log
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,161 @@
+// LLM providers: Gemini first, Groq second (both verified 2026-09-26).
+// Keys from VITE_GEMINI_API_KEY / VITE_GROQ_API_KEY (or localStorage
+// overrides meetx_gemini_api_key / meetx_groq_api_key). Model lists from
+// VITE_GEMINI_MODELS / VITE_GROQ_MODELS with working defaults.
+import { AssistantContext } from './aiAssistantService';
+
+export const geminiKey = (): string =>
+  (((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_GEMINI_API_KEY ||
+    localStorage.getItem('meetx_gemini_api_key')) ||
+    '').trim();
+
+export const groqKey = (): string =>
+  (((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_GROQ_API_KEY ||
+    localStorage.getItem('meetx_groq_api_key')) ||
+    '').trim();
+
+const splitModels = (raw: string, fallback: string[]): string[] => {
+  const list = (raw || '').split(',').map((m) => m.trim()).filter(Boolean);
+  return list.length > 0 ? list : fallback;
+};
+
+export const GEMINI_DEFAULTS = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-flash-latest'];
+export const GROQ_DEFAULTS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
+
+export const geminiModels = (): string[] =>
+  splitModels(
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_GEMINI_MODELS || ''),
+    GEMINI_DEFAULTS
+  );
+
+export const groqModels = (): string[] =>
+  splitModels(
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_GROQ_MODELS || ''),
+    GROQ_DEFAULTS
+  );
+
+export const buildPrompt = (prompt: string, context: AssistantContext): string => {
+  const transcriptSnippet = context.transcript
+    .slice(-8)
+    .map((t) => {
+      const body =
+        t.translatedText && !t.translatedText.includes('translating')
+          ? t.translatedText
+          : t.text;
+      return `${t.speakerName || t.speakerId} [${t.timestamp}]: ${body}`;
+    })
+    .join('\n');
+  const kbSnippet = (context.resources || [])
+    .map((r) => {
+      let body = r.content || '';
+      if (!body && r.url && r.url.startsWith('data:text/plain')) {
+        try {
+          body = decodeURIComponent(r.url.split(',')[1]);
+        } catch {
+          body = '';
+        }
+      }
+      return `### ${r.name}\n${body || '(binary file content not extracted)'}`;
+    })
+    .filter((b) => b.trim())
+    .join('\n\n');
+  const kbBlock = kbSnippet ? `\nKnowledge Base (uploaded documents):\n${kbSnippet}\n` : '';
+  return (
+    `You are MEETX, an elite real-time multilingual AI meeting copilot.\n` +
+    `Meeting Topic: "${context.topic}".\nLanguage: "${context.language}".\n` +
+    `User Notes: "${(context.pastedNotes || '').slice(0, 1000)}"` +
+    `${kbBlock}Recent Transcript (real, live):\n${transcriptSnippet || '(None yet)'}\n\n` +
+    `Rules - REPLY FAST AND CONCISE: maximum 40 words or 3 short bullets. ` +
+    `No preamble, no filler, no disclaimers, no repetition. Professional, ` +
+    `speak-ready meeting tone. If asked what to say, start with "Say: ...". ` +
+    `Answer strictly from the transcript; if info is missing, say so in one line.\n\n` +
+    `User Question: ${prompt}`
+  );
+};
+
+// Circuit breaker: when Gemini rate-limits (429/503) or hangs, skip it
+// entirely for a short window and answer via Groq instead - keeps
+// replies fast instead of waiting on failing Gemini calls.
+let geminiCooldownUntil = 0;
+
+export async function callGemini(prompt: string, context: AssistantContext): Promise<string | null> {
+  const apiKey = geminiKey();
+  if (!apiKey) return null;
+  if (Date.now() < geminiCooldownUntil) return null;
+  const fullPrompt = buildPrompt(prompt, context);
+  for (const model of geminiModels()) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+            generationConfig: { maxOutputTokens: 512, temperature: 0.3 },
+          }),
+        }
+      );
+      clearTimeout(timer);
+      // Fast-fail: rate-limit / server error / timeout -> activate
+      // cooldown and let the caller fall back to Groq immediately.
+      if (res.status === 429 || res.status >= 500) {
+        geminiCooldownUntil = Date.now() + 60000;
+        return null;
+      }
+      if (!res.ok) continue;
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text && String(text).trim()) return String(text).trim();
+    } catch {
+      // Abort/timeout -> same fast-fail: cooldown, use Groq now.
+      geminiCooldownUntil = Date.now() + 30000;
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function callGroq(prompt: string, context: AssistantContext): Promise<string | null> {
+  const apiKey = groqKey();
+  if (!apiKey) return null;
+  const fullPrompt = buildPrompt(prompt, context);
+  for (const model of groqModels()) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model,
+          messages: [
+    'You are MEETX, an elite real-time multilingual AI meeting copilot. REPLY FAST AND CONCISE: max 40 words or 3 short bullets, no preamble, no filler, professional speak-ready tone. If asked what to say, start with Say: ... Answer strictly from the transcript.',
+            { role: 'user', content: fullPrompt },
+          ],
+          max_tokens: 1024,
+          ...(model.includes('gpt-oss') ? { reasoning_effort: 'low' } : {}),
+          temperature: 0.3,
+        }),
+      });
+      clearTimeout(timer);
+      // Fast-fail: rate-limit / server error / timeout -> activate
+      // cooldown and let the caller fall back to Groq immediately.
+      if (res.status === 429 || res.status >= 500) {
+      // Groq fast-fail -> answer from the offline engine at once.
+        return null;
+      }
+      if (!res.ok) continue;
+      const data = await res.json();
+      const text = data?.choices?.[0]?.message?.content;
+      if (text && String(text).trim()) return String(text).trim();
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
