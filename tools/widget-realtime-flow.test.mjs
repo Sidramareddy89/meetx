@@ -165,8 +165,28 @@ const collectText = (node, out = [], depth = 0) => {
 };
 const widgetText = () => collectText(widgetTree).join(' | ');
 
-/** The widget's question textarea (the element carrying onChange + onKeyDown). */
-const findInput = (node) => {
+/** The send button (a clickable button with a `disabled` flag, blue/rounded). */
+const findSendButtonDisabled = (node) => {
+  if (!node || typeof node === 'string' || typeof node === 'number') return undefined;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findSendButtonDisabled(child);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  }
+  if (
+    node.props &&
+    typeof node.props.onClick === 'function' &&
+    typeof node.props.disabled === 'boolean' &&
+    String(node.props.className || '').includes('bg-blue-600')
+  ) {
+    return node.props.disabled;
+  }
+  return node.props ? findSendButtonDisabled(node.props.children) : undefined;
+};
+
+/** The question textarea (the element carrying onChange + onKeyDown). */const findInput = (node) => {
   if (!node || typeof node === 'string' || typeof node === 'number') return null;
   if (Array.isArray(node)) {
     for (const child of node) {
@@ -296,21 +316,40 @@ const main = async () => {
   // ---------------------------------------- typed questions are never dropped
   // A typed question used to be discarded while the assistant was thinking.
   const beforeTyped = requests.length;
-  const typeQuestion = async (text) => {
+  // Type into the question box WITHOUT sending, so the send button's state can
+  // be inspected first.
+  const fillInput = (text) => {
     const input = findInput(widgetTree);
     if (!input) return false;
     input.props.onChange({ target: { value: text } });
     renderAll();
-    // Press Enter, exactly as the user does.
-    const after = findInput(widgetTree);
-    after.props.onKeyDown({ key: 'Enter', preventDefault: () => {} });
+    return true;
+  };
+  const pressEnter = () => {
+    const input = findInput(widgetTree);
+    input.props.onKeyDown({ key: 'Enter', preventDefault: () => {} });
     renderAll();
+  };
+  const typeQuestion = async (text) => {
+    if (!fillInput(text)) return false;
+    pressEnter();
     await tick();
     return true;
   };
 
-  const typedOk = await typeQuestion('Who owns the pricing page?');
+  const typedOk = fillInput('Who owns the pricing page?');
   check('the widget has a text input for questions', typedOk);
+  // The send button must stay enabled while the assistant is busy, otherwise a
+  // typed question could be typed but not sent.
+  const sendDisabled = findSendButtonDisabled(widgetTree);
+  check(
+    'the send button is enabled whenever there is text to send',
+    sendDisabled === false,
+    `disabled=${sendDisabled}`
+  );
+  pressEnter();
+  renderAll();
+  await tick();
   for (let i = 0; i < 40 && requests.length < beforeTyped + 1; i += 1) await sleep(25);
   await sleep(80);
   renderAll();

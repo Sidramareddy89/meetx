@@ -789,7 +789,7 @@ export const FloatingAssistantWidget: React.FC = () => {
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={!inputQuery.trim() || isThinking}
+                disabled={!inputQuery.trim()}
                 className="w-7 h-7 rounded-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-600/30 transition-all cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5 ml-0.5" />
