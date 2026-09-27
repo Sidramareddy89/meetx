@@ -165,6 +165,22 @@ const collectText = (node, out = [], depth = 0) => {
 };
 const widgetText = () => collectText(widgetTree).join(' | ');
 
+/** The widget's question textarea (the element carrying onChange + onKeyDown). */
+const findInput = (node) => {
+  if (!node || typeof node === 'string' || typeof node === 'number') return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findInput(child);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (node.props && typeof node.props.onChange === 'function' && typeof node.props.onKeyDown === 'function') {
+    return node;
+  }
+  return node.props ? findInput(node.props.children) : null;
+};
+
 const main = async () => {
   renderAll();
 
@@ -277,13 +293,129 @@ const main = async () => {
   const allAnswers = answersFor();
   check('the widget now holds 6 answers for 6 remarks', allAnswers.length === 6, `answers=${allAnswers.length}`);
 
+  // ---------------------------------------- typed questions are never dropped
+  // A typed question used to be discarded while the assistant was thinking.
+  const beforeTyped = requests.length;
+  const typeQuestion = async (text) => {
+    const input = findInput(widgetTree);
+    if (!input) return false;
+    input.props.onChange({ target: { value: text } });
+    renderAll();
+    // Press Enter, exactly as the user does.
+    const after = findInput(widgetTree);
+    after.props.onKeyDown({ key: 'Enter', preventDefault: () => {} });
+    renderAll();
+    await tick();
+    return true;
+  };
+
+  const typedOk = await typeQuestion('Who owns the pricing page?');
+  check('the widget has a text input for questions', typedOk);
+  for (let i = 0; i < 40 && requests.length < beforeTyped + 1; i += 1) await sleep(25);
+  await sleep(80);
+  renderAll();
+  check(
+    'a typed question is sent to the assistant',
+    requests.length === beforeTyped + 1,
+    `new=${requests.length - beforeTyped}`
+  );
+  check(
+    'the typed question is answered in the card',
+    (meetingValue.assistantMessages || []).some((m) => m.sender === 'user' && m.text.includes('Who owns the pricing page')) &&
+      answersFor().some((m) => m.id !== 'msg-init'),
+    'the typed question produced no answer'
+  );
+  check(
+    'the input is cleared after sending',
+    findInput(widgetTree)?.props?.value === '',
+    `value=${JSON.stringify(findInput(widgetTree)?.props?.value)}`
+  );
+
+  // A typed question sent WHILE the assistant is busy must still be answered.
+  const beforeBusy = requests.length;
+  await typeQuestion('And the legal deadline?');
+  void meetingValue.askAssistant('Another one right now.', 'query');
+  for (let i = 0; i < 40 && requests.length < beforeBusy + 2; i += 1) await sleep(25);
+  await sleep(120);
+  renderAll();
+  check(
+    'a question typed while the assistant is busy is still answered (not dropped)',
+    requests.length >= beforeBusy + 2,
+    `new=${requests.length - beforeBusy}`
+  );
+
+  // ------------------------------------------- answers are never repeated
+  // A recognizer glitch or speaker echo re-emits the SAME words as the previous
+  // line. Asking again would only repeat the previous answer, so that exact
+  // repeat must be skipped...
+  const answerCountBefore = answersFor().length;
+  globalThis.__speech.onTranscriptReceived({
+    id: 'w-7-echo',
+    speakerId: 's',
+    speakerName: 'Dana',
+    text: 'We should wrap up by Friday.',
+    timestamp: '00:07',
+  });
+  renderAll();
+  await sleep(150);
+  renderAll();
+  check(
+    'an echo of the previous remark does not produce a repeated answer',
+    answersFor().length === answerCountBefore,
+    `answers ${answerCountBefore} -> ${answersFor().length}`
+  );
+  check(
+    'the echo is still transcribed (it is not dropped from the meeting)',
+    (meetingValue.liveTranscript || []).some((e) => e.id === 'w-7-echo')
+  );
+
+  // ...but the same sentence said LATER, after other remarks, is a real new turn
+  // and must still be answered. The guard must not silence genuine repeats.
+  const beforeRealRepeat = answersFor().length;
+  globalThis.__speech.onTranscriptReceived({
+    id: 'w-8-new',
+    speakerId: 's',
+    speakerName: 'Dana',
+    text: 'Ship the dark theme next sprint.',
+    timestamp: '00:08',
+  });
+  renderAll();
+  await sleep(60);
+  globalThis.__speech.onTranscriptReceived({
+    id: 'w-9-repeat-later',
+    speakerId: 's',
+    speakerName: 'Dana',
+    text: 'Ship the dark theme next sprint.',
+    timestamp: '00:09',
+  });
+  renderAll();
+  for (let i = 0; i < 40 && answersFor().length < beforeRealRepeat + 1; i += 1) await sleep(25);
+  await sleep(100);
+  renderAll();
+  check(
+    'a sentence genuinely repeated LATER is still answered (guard is not too broad)',
+    answersFor().length === beforeRealRepeat + 1,
+    `answers ${beforeRealRepeat} -> ${answersFor().length}`
+  );
+  const texts = answersFor().map((m) => m.text);
+  check(
+    'no two consecutive answers are identical',
+    texts.every((t, i) => i === 0 || t !== texts[i - 1]),
+    texts.slice(-3).join(' | ')
+  );
+
   // -------------------------------------------- transcript is still persisted
   // The normal write is a 1.2 s debounce; fire the real pagehide flush the app
   // registers for refresh/tab close, exactly as the browser would.
   fireWindowEvent('pagehide');
   await tick();
   const persisted = JSON.parse(localStorage.getItem(`meetx_meetings_${UID}`) || '[]').find((m) => m.id === 'meet-widget-flow');
-  check('the remarks were persisted on the meeting record', (persisted?.transcript || []).length === 6, `lines=${(persisted?.transcript || []).length}`);
+  const liveCount = (meetingValue.liveTranscript || []).length;
+  check(
+    'every captured remark was persisted on the meeting record',
+    (persisted?.transcript || []).length === liveCount,
+    `stored=${(persisted?.transcript || []).length} live=${liveCount}`
+  );
   check(
     'the persisted record also carries the stored insights',
     !!(persisted?.summary && persisted.summary.keyPoints && persisted.summary.keyPoints.length > 0),

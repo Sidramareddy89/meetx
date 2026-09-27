@@ -134,7 +134,7 @@ const toSecs = (stamp) => {
   return m * 60 + s;
 };
 
-const main = () => {
+const main = async () => {
   console.log('=== MEETX F1 recognizer-lifecycle verification ===\n');
 
   // ------------------------------------------------- 1. session start
@@ -257,6 +257,59 @@ const main = () => {
   __hookTest.unmount();
   check('unmounting stops the recognizer', newest.stopCount >= 1, `stops=${newest.stopCount}`);
 
+  // ----------------------------------- 11. focused mic (meeting, not noise)
+  // The recognizer must be fed echo-cancelled / noise-suppressed audio so it
+  // picks the meeting out of the room, and the mic must be released on stop.
+  const micCalls = [];
+  const micTrack = { stopped: 0, stop() { this.stopped += 1; } };
+  const focusedStream = { name: 'focused', getTracks: () => [micTrack] };
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      ...(globalThis.navigator || {}),
+      mediaDevices: {
+        getUserMedia: async (constraints) => {
+          micCalls.push(constraints);
+          return focusedStream;
+        },
+      },
+    },
+  });
+
+  const beforeFocused = srInstances.length;
+  __hookTest.reset();
+  const focusedApi = renderWidget();
+  focusedApi.startListening();
+  // The upgrade to the focused stream happens once the browser grants the mic.
+  for (let i = 0; i < 20 && micCalls.length === 0; i += 1) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  check(
+    'the mic is requested with echo cancellation, noise suppression and AGC',
+    micCalls.length > 0 &&
+      micCalls[0].audio.echoCancellation === true &&
+      micCalls[0].audio.noiseSuppression === true &&
+      micCalls[0].audio.autoGainControl === true,
+    JSON.stringify(micCalls[0] || null)
+  );
+  check(
+    'recognition starts immediately, without waiting for the mic prompt',
+    srInstances.length > beforeFocused &&
+      srInstances[beforeFocused].startCount === 1,
+    `instances=${srInstances.length - beforeFocused}`
+  );
+  for (let i = 0; i < 20 && !srInstances.some((sr) => sr.stream === focusedStream); i += 1) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  check(
+    'the recognizer is upgraded to the focused stream',
+    srInstances.some((sr) => sr.stream === focusedStream),
+    `streams=${srInstances.map((sr) => (sr.stream ? 'stream' : 'default')).join(',')}`
+  );
+  const focusedApiStop = focusedApi.stopListening();
+  check('stopListening releases the microphone', micTrack.stopped >= 1, `stops=${micTrack.stopped}`);
+  void focusedApiStop;
+
   console.log(report.join('\n'));
   console.log(`\n${passed} passed, ${failed} failed`);
   console.log(failed === 0 ? 'RESULT: F1 recognizer lifecycle verified' : 'RESULT: verification failed');
@@ -264,4 +317,4 @@ const main = () => {
   return failed === 0 ? 0 : 1;
 };
 
-process.exit(main());
+process.exit(await main());

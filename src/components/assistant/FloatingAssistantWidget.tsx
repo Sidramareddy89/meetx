@@ -194,6 +194,8 @@ export const FloatingAssistantWidget: React.FC = () => {
   };
 
   const lastAutoAnsweredId = useRef<string | null>(null);
+  /** Text of the last remark that already triggered an answer (repeat guard). */
+  const lastAutoAnsweredTextRef = useRef<string>('');
   const autoFollowRef = useRef(true);
 
   // Auto-follow: every new participant remark produces its own answer for the
@@ -210,7 +212,19 @@ export const FloatingAssistantWidget: React.FC = () => {
     const last = liveTranscript[liveTranscript.length - 1];
     if (!last || last.id === lastAutoAnsweredId.current) return;
     if (last.id.endsWith('-t') === false && (last.translatedText || '').includes('translating')) return;
+    // A recognizer glitch (or an echo) can re-emit the same words as a new
+    // entry. Asking again would just repeat the previous answer, so the
+    // already-answered text is remembered and skipped.
+    const text = (last.translatedText && !last.translatedText.includes('translating')
+      ? last.translatedText
+      : last.text || ''
+    ).trim().toLowerCase();
+    if (text && text === lastAutoAnsweredTextRef.current) {
+      lastAutoAnsweredId.current = last.id;
+      return;
+    }
     lastAutoAnsweredId.current = last.id;
+    lastAutoAnsweredTextRef.current = text;
     if (activeAssistantMode === 'whatToSay') askAssistant('What should I say right now to the interviewer/meeting?', 'say');
     else if (activeAssistantMode === 'followUp') askAssistant('Give me smart follow-up questions to ask.', 'followup');
     else if (activeAssistantMode === 'recap') askAssistant('Give me a quick recap of the conversation so far.', 'recap');
@@ -353,10 +367,14 @@ export const FloatingAssistantWidget: React.FC = () => {
   };
 
   const handleSend = () => {
-    if (!inputQuery.trim() || isThinking) return;
-    const q = inputQuery;
+    // A typed question is NEVER dropped. It used to return early while the
+    // assistant was thinking, so pressing Enter during a queued burst silently
+    // threw the question away. askAssistant serializes requests, so the question
+    // simply joins the queue and is answered when its turn comes.
+    const q = inputQuery.trim();
+    if (!q) return;
     setInputQuery('');
-    askAssistant(q, 'query');
+    void askAssistant(q, 'query');
   };
 
   const handleAssistantModeChange = (mode: AssistantMode) => {
@@ -645,7 +663,7 @@ export const FloatingAssistantWidget: React.FC = () => {
                   handleSend();
                 }
               }}
-              placeholder="Ask about your screen or conversation, or Ctrl ↵ for Assist"
+              placeholder="Ask a question about this meeting — press Enter to send"
               className="w-full bg-transparent text-xs text-white placeholder:text-slate-500 resize-none outline-none leading-relaxed"
             />
 

@@ -327,7 +327,15 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const addAssistantMessage = (msg: AssistantMessage) => {
-    setAssistantMessages((prev) => [...prev, msg]);
+    setAssistantMessages((prev) => {
+      // Never repeat an answer: an auto-answer for a repeated remark, or a
+      // retriggered action, must not stack the same text in the card.
+      const last = prev[prev.length - 1];
+      if (last && last.sender === msg.sender && last.text.trim() === msg.text.trim()) {
+        return prev;
+      }
+      return [...prev, msg];
+    });
   };
 
   const clearAssistantMessages = () => {

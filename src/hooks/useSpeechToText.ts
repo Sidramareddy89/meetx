@@ -27,6 +27,52 @@ export const useSpeechToText = ({ language, targetLanguage, speakTranslations, o
   const [isTranslating, setIsTranslating] = useState(false);
   const recognitionRef = useRef<any>(null);
   const startTimeRef = useRef<number>(Date.now());
+  // The processed mic stream feeding the recognizer. Held so it can be released
+  // on stop/unmount - otherwise the browser's recording indicator would stay on
+  // after the meeting ends.
+  const audioStreamRef = useRef<MediaStream | null>(null);
+
+  /**
+   * Audio tuned to pick the MEETING out of the room instead of every noise in it:
+   *  - echoCancellation  drops the meeting audio played back through the speakers
+   *                      (without it MEETX transcribes itself in a loop)
+   *  - noiseSuppression  attenuates fans, typing, chairs, background chatter
+   *  - autoGainControl   keeps the level steady when someone speaks quietly
+   *  - channelCount 1    mono is what the recognizer actually consumes, so the
+   *                      device is not asked for channels it will discard
+   * Returns null when the browser denies the mic or offers no devices, so the
+   * caller can still run with the recognizer's own default input.
+   */
+  const openFocusedMicStream = useCallback(async (): Promise<MediaStream | null> => {
+    try {
+      const md = typeof navigator !== 'undefined' ? (navigator as any).mediaDevices : null;
+      if (!md || typeof md.getUserMedia !== 'function') return null;
+      const stream = await md.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
+      audioStreamRef.current = stream;
+      return stream;
+    } catch {
+      // Permission denied or no input device: the recognizer falls back to its
+      // default input rather than the meeting going silent.
+      return null;
+    }
+  }, []);
+
+  const releaseMicStream = useCallback(() => {
+    const stream = audioStreamRef.current;
+    audioStreamRef.current = null;
+    try {
+      stream?.getTracks?.().forEach((track: any) => track.stop());
+    } catch {
+      // best effort
+    }
+  }, []);
 
   // F1: volatile inputs live in refs so that a new callback identity (the widget
   // passes inline arrow functions) or an unrelated state change can never tear
@@ -53,6 +99,11 @@ export const useSpeechToText = ({ language, targetLanguage, speakTranslations, o
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Bumped by every start AND every stop. The mic permission prompt is async, so
+  // without this token a stop (or a second start) while the prompt is open would
+  // still start a recognizer afterwards - leaving the mic live after the meeting.
+  const startTokenRef = useRef(0);
+
   const startListening = useCallback(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -61,12 +112,28 @@ export const useSpeechToText = ({ language, targetLanguage, speakTranslations, o
       isListeningRef.current = true;
       return;
     }
+    if (isListeningRef.current) return;
 
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = false;
-      recognition.lang = language || 'en-US';
+    const token = (startTokenRef.current += 1);
+    isListeningRef.current = true;
+
+    // Create + start a recognizer, optionally fed by the processed mic stream.
+    const buildAndStart = (stream: MediaStream | null) => {
+      try {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        // One alternative only: extra alternatives are the most common way a
+        // stray noise turns into a bogus "transcript".
+        recognition.maxAlternatives = 1;
+        recognition.lang = language || 'en-US';
+        if (stream) {
+          try {
+            recognition.stream = stream;
+          } catch {
+            // Stream not accepted: keep the recognizer's own default input.
+          }
+        }
 
       recognition.onresult = (event: any) => {
         // F1: resolved from refs at event time — always the newest callbacks and
@@ -177,36 +244,69 @@ export const useSpeechToText = ({ language, targetLanguage, speakTranslations, o
       startTimeRef.current = Date.now();
       isListeningRef.current = true;
       setIsListening(true);
-    } catch (err) {
-      console.warn('Error starting speech recognition:', err);
-      setIsListening(true);
-      isListeningRef.current = true;
-    }
+      } catch (err) {
+        console.warn('Error starting speech recognition:', err);
+        setIsListening(true);
+        isListeningRef.current = true;
+      }
+    };
+
+    // Start right away on the default input: the meeting must never wait on a
+    // microphone permission prompt.
+    buildAndStart(null);
+
+    // Then upgrade once, to the echo-cancelled / noise-suppressed stream, as
+    // soon as the browser grants it. The first recognizer is retired: its onend
+    // guard (identity check) means it cannot auto-restart over the new one.
+    void (async () => {
+      const stream = await openFocusedMicStream();
+      if (!stream || startTokenRef.current !== token || !isListeningRef.current) {
+        // Stopped (or already upgraded) while the prompt was open.
+        if (stream && audioStreamRef.current !== stream) {
+          try { stream.getTracks().forEach((t: any) => t.stop()); } catch { /* best effort */ }
+        }
+        return;
+      }
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        // Already stopped.
+      }
+      buildAndStart(stream);
+    })();
     // F1: `language` is the only value that genuinely configures the recognizer
     // (`recognition.lang`). Callbacks, target language and the speak-aloud flag
     // are read from refs, so new callback identities and unrelated state changes
     // no longer tear the instance down.
-  }, [language]);
+  }, [language, openFocusedMicStream, releaseMicStream]);
 
   const stopListening = useCallback(() => {
     // F1: mark the session stopped BEFORE stopping the recognizer so its onend
     // handler cannot auto-restart it.
     isListeningRef.current = false;
+    // Cancel a start that is still waiting on the mic permission prompt.
+    startTokenRef.current += 1;
     if (recognitionRef.current) {
       recognitionRef.current.stop();
       recognitionRef.current = null;
     }
+    // Release the mic, otherwise the browser keeps showing "recording" after the
+    // meeting has ended.
+    releaseMicStream();
     setIsListening(false);
-  }, []);
+  }, [releaseMicStream]);
 
   useEffect(() => {
     return () => {
       isListeningRef.current = false;
+      startTokenRef.current += 1;
       if (recognitionRef.current) {
         recognitionRef.current.stop();
+        recognitionRef.current = null;
       }
+      releaseMicStream();
     };
-  }, []);
+  }, [releaseMicStream]);
 
   return {
     isListening,
