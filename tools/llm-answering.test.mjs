@@ -19,7 +19,7 @@
  * Run it through the bundler harness:  node tools/run-llm-answering-verification.mjs
  */
 
-import { clearLlmDiagnostics, getLlmDiagnostics } from '../src/services/llmProviders';
+import { clearLlmDiagnostics, getLlmDiagnostics, selectConversationContext, selectRelevantResources } from '../src/services/llmProviders';
 import { generateAssistantResponse, PROVIDER_UNAVAILABLE_MESSAGE } from '../src/services/aiAssistantService';
 
 let passed = 0;
@@ -351,13 +351,108 @@ const main = async () => {
   await generateAssistantResponse('What was discussed?', 'query', makeContext());
   const withTranscript = groqCalls()[0]?.body?.messages?.[1]?.content || '';
   check(
-    'when a transcript exists the prompt still grounds on it (unchanged behaviour)',
-    withTranscript.includes(T1.text) && withTranscript.includes('Answer strictly from the transcript') &&
+    'when a transcript exists the prompt still grounds on it (with newer wording)',
+    withTranscript.includes(T1.text) &&
+      /Ground the answer in the conversation above/.test(withTranscript) &&
       !withTranscript.includes('NO TRANSCRIPT HAS BEEN CAPTURED YET'),
-    withTranscript.slice(-160)
+    withTranscript.slice(-200)
   );
 
-  // ------------------------------------ 8. no keys or headers are ever logged
+  // ------------------------------- 10. conversation context: the whole meeting
+  // The spec case: a deadline stated long before the question, then a burst of
+  // later chatter that pushes it out of any fixed tail window.
+  const longConversation = [
+    { id: 'L-1', speakerId: 'Speaker', text: 'Tomorrow we need to submit the project report.', timestamp: '0:05' },
+    ...Array.from({ length: 20 }, (_, i) => ({
+      id: `L-${i + 2}`,
+      speakerId: 'Speaker',
+      text: `Unrelated chatter number ${i + 1} about the weather and the office chairs.`,
+      timestamp: `1:${String(i).padStart(2, '0')}`,
+    })),
+    { id: 'L-22', speakerId: 'Speaker', text: 'Let us wrap up here.', timestamp: '3:00' },
+  ];
+  resetRun();
+  script.groq = 'ok';
+  await generateAssistantResponse('What is the deadline?', 'query', { ...makeContext(), transcript: longConversation });
+  const deadlinePrompt = groqCalls()[0]?.body?.messages?.[1]?.content || '';
+  check(
+    'an older remark that answers the question is NOT lost with the tail window',
+    deadlinePrompt.includes('Tomorrow we need to submit the project report.'),
+    'the deadline remark was dropped from the prompt'
+  );
+  check(
+    'the newest remark is still present',
+    deadlinePrompt.includes('Let us wrap up here.'),
+    'the latest remark is missing'
+  );
+  check(
+    'the newest remark is the one marked as the target',
+    /spoke remark #\d+/.test(deadlinePrompt),
+    'no target remark marked'
+  );
+  const selection = selectConversationContext(longConversation, 'What is the deadline?');
+  check(
+    'context selection reports the older remark it pulled back in',
+    selection.relevantOlderCount >= 1 && selection.lines.some((l) => l.includes('submit the project report')),
+    `relevantOlder=${selection.relevantOlderCount}`
+  );
+  check(
+    'context lines are numbered and carry the transcript-entry id',
+    /^1\. .*\[.*\] \(id L-\d+\): /m.test(selection.lines.join('\n')),
+    selection.lines[0]
+  );
+  check(
+    'irrelevant older chatter is left out (context stays relevant)',
+    !selection.lines.some((l) => l.includes('Unrelated chatter number 7 ')),
+    'irrelevant chatter was included'
+  );
+  check(
+    'a very long conversation is capped by the budget, keeping the newest remark',
+    (() => {
+      const big = Array.from({ length: 60 }, (_, i) => ({
+        id: `B-${i}`,
+        speakerId: 'Speaker',
+        text: `remark ${i} ${'x'.repeat(2000)}`,
+        timestamp: '0:00',
+      }));
+      const sel = selectConversationContext(big, 'deadline report');
+      const chars = sel.lines.join('').length;
+      return sel.truncated === true && chars <= 6000 && sel.lines[sel.lines.length - 1].includes('B-59');
+    })(),
+    'budget did not cap the context'
+  );
+  check(
+    'an empty conversation is handled without fabricating lines',
+    selectConversationContext([], 'anything').lines.length === 0
+  );
+
+  // ------------------------------------------ 11. resource / RAG retrieval
+  const resources = [
+    { id: 'r1', name: 'api-handbook.txt', type: 'text/plain', content: 'The REST API base URL is https://api.example.com/v2 and requires a bearer token.' },
+    { id: 'r2', name: 'catering-menu.txt', type: 'text/plain', content: 'Lunch options include sandwiches, salads and fruit bowls.' },
+  ];
+  resetRun();
+  script.groq = 'ok';
+  await generateAssistantResponse('What is the base URL?', 'query', { ...makeContext(), resources, transcript: [] });
+  const resourcePrompt = groqCalls()[0]?.body?.messages?.[1]?.content || '';
+  check('the relevant resource is retrieved for the LLM', resourcePrompt.includes('https://api.example.com/v2'), 'relevant resource missing');
+  check('resource retrieval is bounded (irrelevant documents are not dumped)', !resourcePrompt.includes('sandwiches'), 'irrelevant resource included');
+  const retrieved = selectRelevantResources(resources, 'What is the base URL?', 'Beta planning');
+  check('retrieval keeps the relevant document first', retrieved.indexOf('api-handbook') < retrieved.indexOf('catering') || !retrieved.includes('catering'), retrieved.slice(0, 80));
+
+  // A typed question with no keys must NEVER get a fabricated answer.
+  localStorage.removeItem('meetx_groq_api_key');
+  localStorage.removeItem('meetx_gemini_api_key');
+  resetRun();
+  const noKeys = await generateAssistantResponse('What is the deadline?', 'query', { ...makeContext(), transcript: longConversation });
+  check(
+    'with no provider key the offline engine is used and labelled, not a fake LLM answer',
+    noKeys.source === 'offline' && noKeys.text.includes('configure a Gemini/Groq key'),
+    `source=${noKeys.source}`
+  );
+  localStorage.setItem('meetx_groq_api_key', 'test-key');
+  localStorage.setItem('meetx_gemini_api_key', 'test-key');
+
   const diagJson = JSON.stringify(getLlmDiagnostics());
   check('diagnostics never contain the API key', !diagJson.includes('test-key'));
   check('diagnostics never contain an Authorization header', !diagJson.includes('Authorization') && !diagJson.includes('Bearer'));

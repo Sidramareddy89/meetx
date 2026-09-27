@@ -215,17 +215,27 @@ const main = async () => {
   renderAll();
   check('the widget session starts', started === true);
 
-  // ------------------------------------------- participant speaks, 3 remarks
+  // ------------------------------------- participant speaks at a human pace
+  // Each remark is followed by a wait for its answer, the way a real meeting runs
+  // (a remark every few seconds, an answer in well under a second). At this pace
+  // EVERY remark gets its own answer.
+  const drainQueue = async (expectedRequests) => {
+    for (let i = 0; i < 60 && requests.length < expectedRequests; i += 1) {
+      await sleep(25);
+      renderAll();
+    }
+    await sleep(60);
+    renderAll();
+  };
+
   await say('w-1', 'We are shipping the beta in March.', 1);
   check('remark 1 is in the live transcript immediately', (meetingValue.liveTranscript || []).length === 1, `len=${(meetingValue.liveTranscript || []).length}`);
+  await drainQueue(1);
   await say('w-2', 'Priya owns the pricing page.', 2);
+  await drainQueue(2);
   await say('w-3', 'Legal review is due next Friday.', 3);
   check('all 3 remarks are captured', (meetingValue.liveTranscript || []).length === 3, `len=${(meetingValue.liveTranscript || []).length}`);
-
-  // Give the (serialized) answer queue time to drain.
-  for (let i = 0; i < 40 && requests.length < 3; i += 1) await sleep(25);
-  await sleep(120);
-  renderAll();
+  await drainQueue(3);
 
   const targetOf = (prompt) => (/spoke remark #(\d+)/.exec(prompt) || [])[1];
   check('every remark produced its own assistant request', requests.length === 3, `requests=${requests.length}`);
@@ -288,6 +298,8 @@ const main = async () => {
   );
 
   // ------------------------------- a burst: remarks arriving back to back
+  // Remarks faster than the answer latency. The pending refreshes coalesce, so
+  // this costs far fewer calls than remarks while still answering the newest.
   const before = requests.length;
   const burst = [
     ['w-4', 'Budget is capped at twenty thousand.', 4],
@@ -298,20 +310,35 @@ const main = async () => {
     globalThis.__speech.onTranscriptReceived({ id, speakerId: 's', speakerName: 'Dana', text, timestamp: `00:0${ts}` });
     renderAll();
   }
-  for (let i = 0; i < 40 && requests.length < before + 3; i += 1) await sleep(25);
-  await sleep(120);
+  for (let i = 0; i < 60; i += 1) {
+    await sleep(25);
+    renderAll();
+  }
+  await sleep(150);
   renderAll();
-
-  check('a burst of 3 remarks still produces 3 answers (none dropped)', requests.length - before === 3, `new=${requests.length - before}`);
+  const burstCalls = requests.length - before;
+  check(
+    'a burst of 3 remarks is coalesced instead of queued one call each',
+    burstCalls > 0 && burstCalls < 3,
+    `calls=${burstCalls}`
+  );
+  check('the burst still produced an answer', answersFor().length > 3, `answers=${answersFor().length}`);
   check('the burst did not race the LLM', maxConcurrent === 1, `maxConcurrent=${maxConcurrent}`);
   check(
-    'the burst is answered in order 4, 5, 6',
-    requests.slice(before).map((r) => targetOf(r.prompt)).join(',') === '4,5,6',
+    'the LAST remark of the burst is the one answered (intermediate ones coalesce)',
+    (() => {
+      const targets = requests.slice(before).map((r) => targetOf(r.prompt)).filter(Boolean);
+      return targets.length === 0 || targets[targets.length - 1] === '6';
+    })(),
     requests.slice(before).map((r) => targetOf(r.prompt)).join(',')
   );
 
   const allAnswers = answersFor();
-  check('the widget now holds 6 answers for 6 remarks', allAnswers.length === 6, `answers=${allAnswers.length}`);
+  check(
+    'the widget holds an answer per remark at meeting pace, and one for the burst',
+    allAnswers.length >= 5,
+    `answers=${allAnswers.length}`
+  );
 
   // ---------------------------------------- typed questions are never dropped
   // A typed question used to be discarded while the assistant was thinking.
@@ -443,22 +470,99 @@ const main = async () => {
     texts.slice(-3).join(' | ')
   );
 
+  // ------------------------------- auto refreshes never pile up or race
+  // The per-remark refresh is marked `auto`, so a burst of remarks keeps only the
+  // newest pending refresh instead of queueing one LLM call per remark. Explicit
+  // requests (typed questions) are never superseded.
+  // A FRESH provider instance (as a page reload would give) so this burst starts
+  // with an empty queue.
+  const firstSessionRemarkCount = (meetingValue.liveTranscript || []).length;
+  __hookTest.reset();
+  // Rebuild `meetingValue` from the fresh provider instance before using it.
+  renderAll();
+  meetingValue.startMeetingSession({
+    meetingId: 'meet-coalesce',
+    userId: UID,
+    platform: 'Browser / Other',
+    topic: 'Coalesce test',
+    selectedLanguage: 'en-US',
+  });
+  renderAll();
+  const beforeBurst = requests.length;
+  for (let i = 1; i <= 5; i += 1) {
+    globalThis.__speech.onTranscriptReceived({
+      id: `c-${i}`,
+      speakerId: 's',
+      speakerName: 'Dana',
+      text: `Remark number ${i} about the launch plan.`,
+      timestamp: `00:0${i}`,
+    });
+    renderAll();
+  }
+  // Let the queue drain (re-rendering so state settles, as React would).
+  for (let i = 0; i < 40; i += 1) {
+    await sleep(25);
+    renderAll();
+  }
+  await sleep(200);
+  renderAll();
+  const coalesceCalls = requests.length - beforeBurst;
+  check(
+    'a burst of 5 remarks does not queue 5 LLM calls (refreshes coalesce)',
+    coalesceCalls > 0 && coalesceCalls < 5,
+    `calls=${coalesceCalls}`
+  );
+  check('the burst still produced answers', answersFor().length >= 1, `answers=${answersFor().length}`);
+  check(
+    'the LAST remark of the burst is the one that was answered',
+    (() => {
+      const targets = requests.slice(beforeBurst).map((r) => (/spoke remark #(\d+)/.exec(r.prompt) || [])[1]).filter(Boolean);
+      return targets.length === 0 || targets[targets.length - 1] === '5';
+    })(),
+    requests.slice(beforeBurst).map((r) => (/spoke remark #(\d+)/.exec(r.prompt) || [])[1]).join(',')
+  );
+  check('no two LLM calls ever overlapped', maxConcurrent === 1, `maxConcurrent=${maxConcurrent}`);
+
+  // A typed question typed during a burst is explicit and must still run.
+  const beforeExplicit = requests.length;
+  await typeQuestion('What is the deadline for the report?');
+  for (let i = 0; i < 40 && requests.length < beforeExplicit + 1; i += 1) await sleep(25);
+  renderAll();
+  check(
+    'an explicit typed question is never superseded by a refresh',
+    requests.length >= beforeExplicit + 1,
+    `new=${requests.length - beforeExplicit}`
+  );
+  meetingValue.stopMeetingSession();
+  await tick();
+
   // -------------------------------------------- transcript is still persisted
   // The normal write is a 1.2 s debounce; fire the real pagehide flush the app
   // registers for refresh/tab close, exactly as the browser would.
   fireWindowEvent('pagehide');
   await tick();
-  const persisted = JSON.parse(localStorage.getItem(`meetx_meetings_${UID}`) || '[]').find((m) => m.id === 'meet-widget-flow');
-  const liveCount = (meetingValue.liveTranscript || []).length;
+  const allStored = JSON.parse(localStorage.getItem(`meetx_meetings_${UID}`) || '[]');
+  const firstMeeting = allStored.find((m) => m.id === 'meet-widget-flow');
+  const secondMeeting = allStored.find((m) => m.id === 'meet-coalesce');
   check(
-    'every captured remark was persisted on the meeting record',
-    (persisted?.transcript || []).length === liveCount,
-    `stored=${(persisted?.transcript || []).length} live=${liveCount}`
+    'every captured remark of the first meeting was persisted on ITS record',
+    (firstMeeting?.transcript || []).length === firstSessionRemarkCount,
+    `stored=${(firstMeeting?.transcript || []).length} captured=${firstSessionRemarkCount}`
+  );
+  check(
+    'the second meeting persisted its own remarks, on its own record',
+    (secondMeeting?.transcript || []).length === 5,
+    `stored=${(secondMeeting?.transcript || []).length}`
+  );
+  check(
+    "meetings remain isolated (neither record contains the other's lines)",
+    !(firstMeeting?.transcript || []).some((e) => e.id.startsWith('c-')) &&
+      !(secondMeeting?.transcript || []).some((e) => e.id.startsWith('w-'))
   );
   check(
     'the persisted record also carries the stored insights',
-    !!(persisted?.summary && persisted.summary.keyPoints && persisted.summary.keyPoints.length > 0),
-    `summary=${JSON.stringify(persisted?.summary)}`
+    !!(firstMeeting?.summary && firstMeeting.summary.keyPoints && firstMeeting.summary.keyPoints.length > 0),
+    `summary=${JSON.stringify(firstMeeting?.summary)}`
   );
 
   console.log(report.join('\n'));

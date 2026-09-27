@@ -98,7 +98,13 @@ interface MeetingContextType {
     meetingId?: string;
   }) => boolean;
   stopMeetingSession: () => void;
-  askAssistant: (queryOrAction: string, actionType?: 'assist' | 'say' | 'followup' | 'recap' | 'query') => Promise<void>;
+  askAssistant: (
+    queryOrAction: string,
+    actionType?: 'assist' | 'say' | 'followup' | 'recap' | 'query',
+    /** `auto: true` marks the per-remark refresh, which may be superseded by a
+     *  newer remark while it is still waiting. Explicit requests never are. */
+    options?: { auto?: boolean }
+  ) => Promise<void>;
   isThinking: boolean;
 }
 
@@ -353,7 +359,10 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     /** F2: authoritative id supplied by the caller (never regenerated here). */
     meetingId?: string;
   }): boolean => {
-    // Check the free meetings limit
+    // The free-meetings gate runs FIRST and stays side-effect free: a refused
+    // session must not write anything at all. The meeting-switch flush therefore
+    // sits below it — a refusal never repoints the active meeting, so there is
+    // nothing to flush in that case.
     if (!isProUser && freeMeetingsLeft <= 0) {
       setIsPlanModalOpen(true);
       return false;
@@ -400,6 +409,16 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         transcript: [],
         status: 'live',
       };
+    }
+
+    // Switching meetings: whatever the OUTGOING session has not written yet must
+    // be flushed against ITS OWN record before the active meeting is repointed.
+    // Without this, a pending debounce fires later against the new meeting's
+    // ref and the previous meeting silently loses its last remarks. This is the
+    // only point where a switch is certain, and flushTranscriptNow reads the ref
+    // synchronously, so the write still lands on the outgoing record.
+    if (activeMeetingRef.current?.id) {
+      void flushTranscriptNow('live');
     }
 
     activeMeetingRef.current = newMeeting;
@@ -521,29 +540,88 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   /**
-   * Every assistant request runs through this chain, so answers reach the widget
-   * ONE BY ONE in the order they were asked.
+   * Every assistant request goes through one queue, so answers reach the widget
+   * ONE BY ONE in the order they were asked - never concurrently.
    *
-   * Without it, a burst of participant remarks fired several LLM calls at once:
-   * they raced, the answers could land out of order, and a remark that arrived
-   * while another request was still in flight was dropped entirely (the
-   * auto-answer effect bailed on `isThinking` and never re-ran for it).
-   * A rejected request never wedges the chain, so one failure cannot silence
+   * Two kinds of request:
+   *  - explicit (a typed question, a voice question, an action pill): ALWAYS runs.
+   *  - auto (the per-remark refresh): if several arrive while others are still
+   *    waiting, only the NEWEST is kept. The superseded ones carry the same
+   *    instructions and a strictly older slice of the conversation, which the
+   *    newest request already contains - so keeping them would spend provider
+   *    calls on stale answers and let the queue grow without bound in a fast
+   *    conversation. The newest remark is therefore always answered.
+   *
+   * A rejected request never wedges the queue, so one failure cannot silence
    * every later answer.
    */
-  const assistantQueueRef = useRef<Promise<void>>(Promise.resolve());
+  interface AssistantQueueItem {
+    run: () => Promise<void>;
+    auto: boolean;
+    /** Set once the request has started, so it can no longer be superseded. */
+    started: boolean;
+    /** Resolves the caller's promise, whether the request ran or was superseded. */
+    settle: () => void;
+  }
+  const assistantQueueRef = useRef<AssistantQueueItem[]>([]);
+  const assistantBusyRef = useRef(false);
+
+  const pumpAssistantQueue = () => {
+    if (assistantBusyRef.current) return;
+    const queue = assistantQueueRef.current;
+    if (queue.length === 0) return;
+    // Explicit requests jump ahead of any waiting auto-refresh.
+    const index = queue.findIndex((item) => !item.auto);
+    const at = index === -1 ? 0 : index;
+    const [item] = queue.splice(at, 1);
+    item.started = true;
+    assistantBusyRef.current = true;
+    item
+      .run()
+      .catch(() => undefined)
+      .then(() => {
+        assistantBusyRef.current = false;
+        pumpAssistantQueue();
+      });
+  };
 
   const askAssistant = (
     queryOrAction: string,
-    actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query' = 'query'
+    actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query' = 'query',
+    options?: { auto?: boolean }
   ): Promise<void> => {
-    const run = () => askAssistantRequest(queryOrAction, actionType);
-    const next = assistantQueueRef.current.then(run, run);
-    assistantQueueRef.current = next.then(
-      () => undefined,
-      () => undefined
-    );
-    return next;
+    const auto = options?.auto === true;
+    let settle: () => void = () => {};
+    const done = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const item: AssistantQueueItem = {
+      run: async () => {
+        try {
+          await askAssistantRequest(queryOrAction, actionType);
+        } finally {
+          settle();
+        }
+      },
+      auto,
+      started: false,
+      settle,
+    };
+    if (auto) {
+      // Supersede every auto-refresh that has not started yet: its answer would
+      // be computed from a strictly older slice of the conversation, which the
+      // newest request already contains. Its caller is settled so nothing waits
+      // on a request that will never run.
+      const queue = assistantQueueRef.current;
+      const superseded = queue.filter((q) => q.auto && !q.started);
+      if (superseded.length > 0) {
+        assistantQueueRef.current = queue.filter((q) => !(q.auto && !q.started));
+        for (const q of superseded) q.settle();
+      }
+    }
+    assistantQueueRef.current.push(item);
+    pumpAssistantQueue();
+    return done;
   };
 
   // The conversation of the meeting that is active RIGHT NOW: the lines its

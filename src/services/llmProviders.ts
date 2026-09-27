@@ -38,31 +38,189 @@ export const groqModels = (): string[] =>
   );
 
 /**
- * How many recent remarks are sent to the model. The realtime answer has to be
- * grounded in the WHOLE conversation while still reacting to the newest remark,
- * so the window is wide enough to carry the discussion, not just the last few
- * lines. A numbered, speaker-attributed line per remark.
+ * Realtime context assembly.
+ *
+ * The assistant must be grounded in the WHOLE meeting conversation, not just the
+ * last few lines, while still reacting to the newest remark. A fixed tail window
+ * silently loses older facts - e.g. "Tomorrow we need to submit the project
+ * report." followed by "What is the deadline?" answers wrongly once that line
+ * falls out of the window. So the context is assembled from two parts:
+ *
+ *   1. the most recent remarks (the live feel), and
+ *   2. older remarks RELEVANT to this question, selected by keyword overlap with
+ *      the question / topic / notes,
+ *
+ * both inside an explicit character budget so the request cannot grow without
+ * bound during a long meeting. Nothing is invented and nothing is reordered.
  */
-const MAX_TRANSCRIPT_LINES = 24;
 
-export const buildPrompt = (
-  prompt: string,
-  context: AssistantContext,
-  actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query' = 'query'
-): string => {
-  // Numbered so the newest remark can be pointed at by reference instead of by
-  // repeating its text (repeating a remark made it look like two statements).
-  const transcriptLines = context.transcript.slice(-MAX_TRANSCRIPT_LINES).map((t, i) => {
-    const body =
-      t.translatedText && !t.translatedText.includes('translating')
-        ? t.translatedText
-        : t.text;
-    return `${i + 1}. ${t.speakerName || t.speakerId} [${t.timestamp}]: ${body}`;
+/** Most recent remarks always carried (the live tail of the conversation). */
+const RECENT_REMARK_COUNT = 12;
+/** Older remarks that can be pulled back in as relevant context. */
+const MAX_RELEVANT_OLDER = 12;
+/** Character budget for the conversation block. */
+const CONVERSATION_BUDGET_CHARS = 6000;
+/** Budget for the uploaded-resource block. */
+const RESOURCE_BUDGET_CHARS = 4000;
+/** Per-resource cap, so one big document cannot crowd out the conversation. */
+const RESOURCE_CHUNK_CHARS = 1500;
+
+const STOP_WORDS = new Set(
+  ('a an the and or but is are was were be been being to of in on for with that this these those it as at by from about into over after before we you they i my our your do does did have has had will would can could should what when where who how why not no yes me him us them all any each more most some such only own same than too very just now then there here if else').split(' ')
+);
+
+/**
+ * Small, explicit intent table for question types. Lexical overlap alone cannot
+ * connect "What is the deadline?" to "Tomorrow we need to submit the report" -
+ * the words do not match even though the remark IS the deadline. These are the
+ * question terms and the meeting words that usually answer them. This is a
+ * hand-written lookup, not a model: it only widens what is retrieved.
+ */
+const QUESTION_INTENTS: { terms: string[]; related: string[] }[] = [
+  {
+    terms: ['deadline', 'due', 'when', 'date', 'timeline', 'schedule', 'eod'],
+    related: ['tomorrow', 'today', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'week', 'month', 'morning', 'afternoon', 'evening', 'submit', 'ship', 'deliver', 'launch', 'review', 'close', 'ends', 'start'],
+  },
+  {
+    terms: ['who', 'owner', 'assign', 'assigned', 'responsible', 'lead'],
+    related: ['owns', 'owner', 'lead', 'taking', 'handle', 'handles', 'responsible', 'assigned', 'priya', 'ana'],
+  },
+  {
+    terms: ['budget', 'cost', 'price', 'spend', 'money'],
+    related: ['budget', 'cap', 'capped', 'thousand', 'dollars', 'cost', 'spend', 'spending', 'price'],
+  },
+  {
+    terms: ['status', 'progress', 'update', 'where'],
+    related: ['done', 'finished', 'shipped', 'ready', 'blocked', 'in', 'progress', 'started'],
+  },
+  {
+    terms: ['url', 'endpoint', 'api', 'link', 'base'],
+    related: ['url', 'endpoint', 'api', 'base', 'https', 'token', 'bearer'],
+  },
+];
+
+/**
+ * Lower-cased content words, stop words removed, de-duplicated. When `question` is
+ * given, the matching intent terms are added so the retrieval can connect a
+ * question to the remarks that answer it.
+ */
+export const contentKeywords = (text: string, question = ''): string[] => {
+  const words = (text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s'-]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+  const out = new Set(words);
+  if (question) {
+    const asked = (question || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s'-]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+    for (const intent of QUESTION_INTENTS) {
+      if (intent.terms.some((t) => asked.includes(t))) {
+        for (const r of intent.related) out.add(r);
+      }
+    }
+  }
+  return Array.from(out);
+};
+
+const entryBody = (t: { text: string; translatedText?: string }): string =>
+  (t.translatedText && !t.translatedText.includes('translating') ? t.translatedText : t.text) || '';
+
+export interface ConversationContextSelection {
+  /** Numbered, chronological, as sent to the model. */
+  lines: string[];
+  /** Number of the newest remark within `lines` (0 when there is none). */
+  latestLineNo: number;
+  /** How many older remarks were pulled back in as relevant context. */
+  relevantOlderCount: number;
+  /** True when remarks were left out by the budget (honest reporting). */
+  truncated: boolean;
+}
+
+
+/**
+ * Pick the conversation to send: the recent tail plus older remarks relevant to
+ * the question, ordered chronologically so the model reads the meeting in order.
+ */
+export const selectConversationContext = (
+  entries: {
+    id: string;
+    speakerId: string;
+    speakerName?: string;
+    text: string;
+    translatedText?: string;
+    timestamp: string;
+  }[],
+  question: string,
+  recentCount = RECENT_REMARK_COUNT
+): ConversationContextSelection => {
+  const spoken = (entries || []).filter((e) => (entryBody(e) || '').trim());
+  if (spoken.length === 0) {
+    return { lines: [], latestLineNo: 0, relevantOlderCount: 0, truncated: false };
+  }
+
+  const recent = spoken.slice(-recentCount);
+  const older = spoken.slice(0, Math.max(0, spoken.length - recentCount));
+
+  // Relevance of an older remark to what is being asked right now. The question
+  // contributes its own words plus the related terms for its intent, so
+  // "What is the deadline?" can retrieve "Tomorrow we need to submit the report."
+  const queryWords = new Set(contentKeywords('', question));
+  const scored = older
+    .map((entry) => {
+      const words = contentKeywords(entryBody(entry));
+      const hits = words.filter((w) => queryWords.has(w)).length;
+      return { entry, score: hits / Math.max(1, Math.sqrt(words.length)) };
+    })
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_RELEVANT_OLDER)
+    .map((s) => s.entry);
+
+  // Chronological and de-duplicated (a relevant remark may also be in `recent`).
+  const byId = new Map<string, (typeof spoken)[number]>();
+  for (const e of scored) byId.set(e.id, e);
+  for (const e of recent) byId.set(e.id, e);
+  let ordered = Array.from(byId.values()).sort((a, b) => spoken.indexOf(a) - spoken.indexOf(b));
+
+  // Budget from the oldest end, so the newest remarks are never the ones lost.
+  const totalChars = () => ordered.reduce((sum, e) => sum + entryBody(e).length, 0);
+  let truncated = false;
+  while (ordered.length > 1 && totalChars() > CONVERSATION_BUDGET_CHARS) {
+    ordered = ordered.slice(1);
+    truncated = true;
+  }
+
+  const lines = ordered.map((t, i) => {
+    const body = entryBody(t);
+    // The transcript-entry id is carried so an answer can cite it truthfully.
+    return `${i + 1}. ${t.speakerName || t.speakerId} [${t.timestamp}] (id ${t.id}): ${body}`;
   });
-  const transcriptSnippet = transcriptLines.join('\n');
-  // Which numbered remark the answer is about right now.
-  const latestLineNo = transcriptLines.length;
-  const kbSnippet = (context.resources || [])
+  const recentIds = new Set(recent.map((e) => e.id));
+  return {
+    lines,
+    latestLineNo: lines.length,
+    relevantOlderCount: scored.filter((e) => ordered.some((o) => o.id === e.id) && !recentIds.has(e.id)).length,
+    truncated,
+  };
+};
+
+/**
+ * Retrieval over the uploaded resources the meeting already carries. This project
+ * has no embedding/vector store, so relevance is lexical (keyword overlap with
+ * the question and the meeting topic/notes) and each resource is capped, which
+ * stops one large document from drowning the conversation.
+ */
+export const selectRelevantResources = (
+  resources: { name: string; content?: string; url?: string }[] | undefined,
+  question: string,
+  topicAndNotes = ''
+): string => {
+  const queryWords = new Set(contentKeywords(`${question} ${topicAndNotes}`, question));
+  const blocks = (resources || [])
     .map((r) => {
       let body = r.content || '';
       if (!body && r.url && r.url.startsWith('data:text/plain')) {
@@ -72,11 +230,50 @@ export const buildPrompt = (
           body = '';
         }
       }
-      return `### ${r.name}\n${body || '(binary file content not extracted)'}`;
+      if (!body.trim()) return null;
+      const words = contentKeywords(`${r.name} ${body}`);
+      const hits = words.filter((w) => queryWords.has(w)).length;
+      return { name: r.name, body, score: hits / Math.max(1, Math.sqrt(words.length)) };
     })
-    .filter((b) => b.trim())
-    .join('\n\n');
-  const kbBlock = kbSnippet ? `\nKnowledge Base (uploaded documents):\n${kbSnippet}\n` : '';
+    .filter((b): b is { name: string; body: string; score: number } => Boolean(b))
+    .sort((a, b) => b.score - a.score);
+
+  // Only documents that actually match the question/topic are sent: dumping
+  // every uploaded file is how a large irrelevant document drowns the
+  // conversation. If nothing matches at all, the first documents are still sent
+  // so an uploaded briefing is never silently ignored.
+  const relevant = blocks.filter((b) => b.score > 0);
+  const chosen = relevant.length > 0 ? relevant : blocks.slice(0, 2);
+
+  const kept: string[] = [];
+  let used = 0;
+  for (const block of chosen) {
+    const chunk =
+      block.body.length > RESOURCE_CHUNK_CHARS
+        ? `${block.body.slice(0, RESOURCE_CHUNK_CHARS)}\n...(truncated)`
+        : block.body;
+    const text = `### ${block.name}\n${chunk}`;
+    if (used + text.length > RESOURCE_BUDGET_CHARS) continue;
+    kept.push(text);
+    used += text.length;
+  }
+  return kept.join('\n\n');
+};
+
+
+export const buildPrompt = (
+  prompt: string,
+  context: AssistantContext,
+  actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query' = 'query'
+): string => {
+  // The conversation the model actually sees: recent remarks + older relevant
+  // ones, budgeted. The question decides which older remarks matter.
+  const conversation = selectConversationContext(context.transcript, prompt);
+  const transcriptSnippet = conversation.lines.join('\n');
+  const latestLineNo = conversation.latestLineNo;
+  const notes = (context.pastedNotes || '').slice(0, 1000);
+  const kbSnippet = selectRelevantResources(context.resources, prompt, `${context.topic} ${notes}`);
+  const kbBlock = kbSnippet ? `\nKnowledge Base (uploaded documents, most relevant first):\n${kbSnippet}\n` : '';
   // Whether real speech was captured is the single most important fact about
   // the request: when it was not, the model must still be useful (answer from
   // the topic/notes/documents and say how to enable grounding) instead of
@@ -84,7 +281,10 @@ export const buildPrompt = (
   // ("Answer strictly from the transcript") produced in the widget.
   const hasTranscript = transcriptSnippet.trim().length > 0;
   const groundingRule = hasTranscript
-    ? 'Answer strictly from the transcript; if info is missing, say so in one line.'
+    ? 'Ground the answer in the conversation above, including older remarks that are ' +
+      'listed there. If the conversation does NOT contain the answer, still answer the ' +
+      'question from your own knowledge, and add one short note that this meeting did not ' +
+      'cover it. Never claim someone said something they did not.'
     : 'NO TRANSCRIPT HAS BEEN CAPTURED YET. Never refuse and never say you were given no ' +
       'transcript. Answer from the meeting topic, the user notes and the uploaded documents, ' +
       'then close with one short line telling the user to turn on the microphone so answers ' +
@@ -92,8 +292,8 @@ export const buildPrompt = (
   return (
     `You are MEETX, an elite real-time multilingual AI meeting copilot.\n` +
     `Meeting Topic: "${context.topic}".\nLanguage: "${context.language}".\n` +
-    `User Notes: "${(context.pastedNotes || '').slice(0, 1000)}"` +
-    `${kbBlock}Recent Transcript (real, live, oldest first):\n${transcriptSnippet || '(no speech captured yet — microphone off, not permitted, or silent)'}\n\n` +
+    `User Notes: "${notes}"` +
+    `${kbBlock}Meeting conversation so far (real, live, chronological; older relevant remarks are included - use the whole thing, not only the last line):\n${transcriptSnippet || '(no speech captured yet — microphone off, not permitted, or silent)'}\n\n` +
     (latestLineNo ? `The participant just spoke remark #${latestLineNo} - answer THAT remark, using the rest of the conversation as context.\n\n` : '') +
     `Rules - REPLY FAST AND CONCISE. Answer in TEXT ONLY, in exactly this shape:` +
     `\n1) the answer itself - one or two short lines, at most 25 words (or up to 3 short bullets). ` +

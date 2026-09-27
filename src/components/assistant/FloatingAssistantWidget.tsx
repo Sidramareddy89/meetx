@@ -225,10 +225,10 @@ export const FloatingAssistantWidget: React.FC = () => {
     }
     lastAutoAnsweredId.current = last.id;
     lastAutoAnsweredTextRef.current = text;
-    if (activeAssistantMode === 'whatToSay') askAssistant('What should I say right now to the interviewer/meeting?', 'say');
-    else if (activeAssistantMode === 'followUp') askAssistant('Give me smart follow-up questions to ask.', 'followup');
-    else if (activeAssistantMode === 'recap') askAssistant('Give me a quick recap of the conversation so far.', 'recap');
-    else askAssistant('Please assist me with key points and advice for this meeting.', 'assist');
+    if (activeAssistantMode === 'whatToSay') void askAssistant('What should I say right now to the interviewer/meeting?', 'say', { auto: true });
+    else if (activeAssistantMode === 'followUp') void askAssistant('Give me smart follow-up questions to ask.', 'followup', { auto: true });
+    else if (activeAssistantMode === 'recap') void askAssistant('Give me a quick recap of the conversation so far.', 'recap', { auto: true });
+    else void askAssistant('Please assist me with key points and advice for this meeting.', 'assist', { auto: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveTranscript.length]);
 
