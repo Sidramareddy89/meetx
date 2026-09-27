@@ -312,6 +312,40 @@ const main = async () => {
     'the system prompt forbids replying that no transcript was given',
     /Never reply that you were given no transcript/.test(groqCalls()[0]?.body?.messages?.[0]?.content || '')
   );
+  check(
+    'the system prompt requires text only and the answer + context shape',
+    /TEXT ONLY/.test(groqCalls()[0]?.body?.messages?.[0]?.content || '') &&
+      /Context:/.test(groqCalls()[0]?.body?.messages?.[0]?.content || ''),
+    (groqCalls()[0]?.body?.messages?.[0]?.content || '').slice(0, 80)
+  );
+  check(
+    'the user prompt asks for a concise text answer followed only by context',
+    /TEXT ONLY/.test(emptyPrompt) && /Context:/.test(emptyPrompt) && /at most 25 words/.test(emptyPrompt),
+    emptyPrompt.slice(emptyPrompt.indexOf('Rules'), emptyPrompt.indexOf('Rules') + 120)
+  );
+  check(
+    'the prompt tells the model not to mention audio/reading aloud',
+    /never mention audio, voice, speaking aloud or reading aloud/i.test(emptyPrompt)
+  );
+
+  // --------------------------------- 9. "Say:" is used only for the say action
+  resetRun();
+  await generateAssistantResponse('What should I say next?', 'say', makeContext());
+  const sayPrompt = groqCalls()[0]?.body?.messages?.[1]?.content || '';
+  check(
+    'the "what to say" action asks for a "Say: ..." opener',
+    /asking WHAT TO SAY, so start the answer with "Say:/.test(sayPrompt),
+    sayPrompt.slice(sayPrompt.indexOf('1) the answer'), sayPrompt.indexOf('1) the answer') + 90)
+  );
+  resetRun();
+  await generateAssistantResponse('Summarize the conversation so far.', 'recap', makeContext());
+  const recapPrompt = groqCalls()[0]?.body?.messages?.[1]?.content || '';
+  check(
+    'a recap/summary must NOT be told to start with "Say:"',
+    /answer it directly and do NOT start with "Say:"/.test(recapPrompt) &&
+      !/asking WHAT TO SAY/.test(recapPrompt),
+    recapPrompt.slice(recapPrompt.indexOf('1) the answer'), recapPrompt.indexOf('1) the answer') + 90)
+  );
 
   resetRun();
   await generateAssistantResponse('What was discussed?', 'query', makeContext());

@@ -231,7 +231,9 @@ export const FloatingAssistantWidget: React.FC = () => {
     },
     onVoiceQuery: (text) => {
       // Voice question detected → send it to the LLM for an answer.
-      // The response will appear in the widget and can be read aloud if needed.
+      // The response is text and appears in the widget card; answers are never
+      // spoken aloud (only translated participant lines can be, via the mute
+      // toggle, and that is off by default).
       askAssistant(text, 'query');
     },
   });

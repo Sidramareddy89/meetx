@@ -45,7 +45,11 @@ export const groqModels = (): string[] =>
  */
 const MAX_TRANSCRIPT_LINES = 24;
 
-export const buildPrompt = (prompt: string, context: AssistantContext): string => {
+export const buildPrompt = (
+  prompt: string,
+  context: AssistantContext,
+  actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query' = 'query'
+): string => {
   // Numbered so the newest remark can be pointed at by reference instead of by
   // repeating its text (repeating a remark made it look like two statements).
   const transcriptLines = context.transcript.slice(-MAX_TRANSCRIPT_LINES).map((t, i) => {
@@ -91,10 +95,17 @@ export const buildPrompt = (prompt: string, context: AssistantContext): string =
     `User Notes: "${(context.pastedNotes || '').slice(0, 1000)}"` +
     `${kbBlock}Recent Transcript (real, live, oldest first):\n${transcriptSnippet || '(no speech captured yet — microphone off, not permitted, or silent)'}\n\n` +
     (latestLineNo ? `The participant just spoke remark #${latestLineNo} - answer THAT remark, using the rest of the conversation as context.\n\n` : '') +
-    `Rules - REPLY FAST AND CONCISE: maximum 40 words or 3 short bullets. ` +
-    `No preamble, no filler, no disclaimers, no repetition. Professional, ` +
-    `speak-ready meeting tone. If asked what to say, start with "Say: ...". ` +
-    `Use the whole conversation above for context, and answer the most recent remark. ` +
+    `Rules - REPLY FAST AND CONCISE. Answer in TEXT ONLY, in exactly this shape:` +
+    `\n1) the answer itself - one or two short lines, at most 25 words (or up to 3 short bullets). ` +
+    (actionType === 'say'
+      ? `The user is asking WHAT TO SAY, so start the answer with "Say: ...".`
+      : `The user is asking a question, so answer it directly and do NOT start with "Say:".`) +
+    `\n2) then a single line starting with "Context:" that gives the short reason in a few ` +
+    `words (you may add the remark number in brackets). ` +
+    `\nStop there. No preamble, no filler, no disclaimers, no repetition, no offer to ` +
+    `elaborate, and never mention audio, voice, speaking aloud or reading aloud - the ` +
+    `answer is read on screen.` +
+    `\nUse the whole conversation above for context, and answer the most recent remark. ` +
     `${groundingRule}\n\n` +
     `User Question: ${prompt}`
   );
@@ -155,7 +166,11 @@ const recordAttempt = (attempt: LlmAttemptDiagnostic): void => {
 const classifyGeminiError = (status: number): LlmErrorCategory =>
   status === 429 ? 'rate-limit' : status >= 500 ? 'server-error' : 'client-error';
 
-export async function callGemini(prompt: string, context: AssistantContext): Promise<string | null> {
+export async function callGemini(
+  prompt: string,
+  context: AssistantContext,
+  actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query' = 'query'
+): Promise<string | null> {
   const apiKey = geminiKey();
   if (!apiKey) {
     return null;
@@ -171,7 +186,7 @@ export async function callGemini(prompt: string, context: AssistantContext): Pro
     });
     return null;
   }
-  const fullPrompt = buildPrompt(prompt, context);
+  const fullPrompt = buildPrompt(prompt, context, actionType);
   for (const model of geminiModels()) {
     const startedAt = Date.now();
     try {
@@ -252,12 +267,16 @@ export async function callGemini(prompt: string, context: AssistantContext): Pro
   return null;
 }
 
-export async function callGroq(prompt: string, context: AssistantContext): Promise<string | null> {
+export async function callGroq(
+  prompt: string,
+  context: AssistantContext,
+  actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query' = 'query'
+): Promise<string | null> {
   const apiKey = groqKey();
   if (!apiKey) {
     return null;
   }
-  const fullPrompt = buildPrompt(prompt, context);
+  const fullPrompt = buildPrompt(prompt, context, actionType);
   for (const model of groqModels()) {
     const startedAt = Date.now();
     try {
@@ -273,7 +292,7 @@ export async function callGroq(prompt: string, context: AssistantContext): Promi
             {
               role: 'system',
               content:
-                'You are MEETX, an elite real-time multilingual AI meeting copilot. REPLY FAST AND CONCISE: max 40 words or 3 short bullets, no preamble, no filler, professional speak-ready tone. If asked what to say, start with Say: ... Ground your answer in the transcript when one has been captured; when none has, still answer from the topic and notes and say how to enable the mic. Never reply that you were given no transcript.',
+                'You are MEETX, a real-time multilingual AI meeting copilot. TEXT ONLY: never produce audio, never suggest speaking or reading aloud. Answer in exactly two parts - (1) the answer, one or two short lines, at most 25 words or up to 3 short bullets, starting with "Say: ..." when asked what to say; (2) a single "Context:" line naming the remark it is based on. Then stop. No preamble, filler or disclaimers. Ground answers in the transcript when one has been captured; when none has, still answer from the topic and notes and say how to enable the mic. Never reply that you were given no transcript.',
             },
             { role: 'user', content: fullPrompt },
           ],

@@ -147,14 +147,14 @@ export const generateAssistantResponse = async (
   //    were returning 503 "high demand" / 4 s timeouts from this network, which
   //    put a failed first attempt (and its cooldown) in front of every reply.
   //    Gemini stays as the fallback so nothing is lost if Groq rate-limits.
-  const groqAnswer = await callGroq(queryOrAction, context);
+  const groqAnswer = await callGroq(queryOrAction, context, actionType);
   if (groqAnswer) {
     return { text: groqAnswer, followupSuggestions: suggestions, source: 'llm' };
   }
 
   // 2. Gemini fallback when Groq is unavailable / rate-limited / 4xx.
   //    (gemini-3.7-flash, 3.6-flash, flash-latest one by one; 1.5-flash is retired.)
-  const geminiAnswer = await callGemini(queryOrAction, context);
+  const geminiAnswer = await callGemini(queryOrAction, context, actionType);
   if (geminiAnswer) {
     return { text: geminiAnswer, followupSuggestions: suggestions, source: 'llm' };
   }
