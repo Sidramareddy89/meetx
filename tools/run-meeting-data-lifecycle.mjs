@@ -21,20 +21,23 @@
  * Firestore mode, exactly like the real `isFirebaseConfigured()`.
  *
  * Usage:  node tools/run-meeting-data-lifecycle.mjs
- * Exit code 0 = all meeting-data assertions passed.
+ *         node tools/run-meeting-data-lifecycle.mjs free-meeting-quota.test.mjs
+ *         (an optional test file reuses the same boundary stubs)
+ * Exit code 0 = all assertions passed.
  */
 
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, basename } from 'node:path';
 import { existsSync, rmSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const entry = resolve(__dirname, 'meeting-data-lifecycle.test.mjs');
+const testFile = process.argv[2] || 'meeting-data-lifecycle.test.mjs';
+const entry = resolve(__dirname, testFile);
 const reactShim = resolve(__dirname, 'react-hook-shim.mjs');
 const authStub = resolve(__dirname, 'auth-context-stub.mjs');
-const outfile = resolve(__dirname, '.meeting-data-lifecycle.tmp.mjs');
+const outfile = resolve(__dirname, `.${basename(testFile).replace(/\.test\.mjs$/, '')}.tmp.mjs`);
 
 const FIREBASE_STUB = `
 const calls = () => (globalThis.__meetxCalls = globalThis.__meetxCalls || []);

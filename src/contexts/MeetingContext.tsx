@@ -5,6 +5,19 @@ import { buildLiveBrief, buildMeetingTranscriptContext, mergeTranscriptEntriesBy
 import { createMeetingId, updateStoredMeeting } from '../services/meetingService';
 import { useAuth } from './AuthContext';
 
+/**
+ * How many meetings a free (non-Pro) account may start. Changing this value
+ * grants every existing browser a FRESH full allowance (see the quota
+ * initializer below), instead of leaving a counter that was already exhausted
+ * under the previous limit.
+ */
+export const MAX_FREE_MEETINGS = 10;
+
+const FREE_MEETINGS_LEFT_KEY = 'meetx_free_meetings_left';
+/** Records which allowance the stored counter belongs to, so a limit change
+ *  is detected and the counter is reset rather than resumed at an old value. */
+const FREE_MEETINGS_LIMIT_KEY = 'meetx_free_meetings_limit';
+
 export interface AssistantMessage {
   id: string;
   sender: 'assistant' | 'user' | 'system';
@@ -105,10 +118,20 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [hideMeetxHidesWidget, setHideMeetxHidesWidget] = useState<boolean>(false);
   const [isPlatformClosed, setIsPlatformClosed] = useState<boolean>(false);
 
-  // 3 Free Meetings Quota & Plan Modal
+  // Free meetings quota & plan modal. The stored counter is tied to the
+  // allowance it was created under: when MAX_FREE_MEETINGS differs from the
+  // stored one (first run, or the allowance was raised/lowered), the counter is
+  // reset to a full allowance instead of resuming an exhausted old value.
   const [freeMeetingsLeft, setFreeMeetingsLeft] = useState<number>(() => {
-    const saved = localStorage.getItem('meetx_free_meetings_left');
-    return saved !== null ? parseInt(saved, 10) : 3;
+    const saved = localStorage.getItem(FREE_MEETINGS_LEFT_KEY);
+    const savedLimit = Number(localStorage.getItem(FREE_MEETINGS_LIMIT_KEY));
+    if (saved === null || savedLimit !== MAX_FREE_MEETINGS) {
+      localStorage.setItem(FREE_MEETINGS_LEFT_KEY, String(MAX_FREE_MEETINGS));
+      localStorage.setItem(FREE_MEETINGS_LIMIT_KEY, String(MAX_FREE_MEETINGS));
+      return MAX_FREE_MEETINGS;
+    }
+    const parsed = parseInt(saved, 10);
+    return Number.isFinite(parsed) ? parsed : MAX_FREE_MEETINGS;
   });
   const [isProUser, setIsProUser] = useState<boolean>(() => {
     return localStorage.getItem('meetx_is_pro') === 'true';
@@ -314,7 +337,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     /** F2: authoritative id supplied by the caller (never regenerated here). */
     meetingId?: string;
   }): boolean => {
-    // Check 3 Free Meetings limit
+    // Check the free meetings limit
     if (!isProUser && freeMeetingsLeft <= 0) {
       setIsPlanModalOpen(true);
       return false;
@@ -324,7 +347,8 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!isProUser) {
       const updated = freeMeetingsLeft - 1;
       setFreeMeetingsLeft(updated);
-      localStorage.setItem('meetx_free_meetings_left', updated.toString());
+      localStorage.setItem(FREE_MEETINGS_LEFT_KEY, updated.toString());
+      localStorage.setItem(FREE_MEETINGS_LIMIT_KEY, String(MAX_FREE_MEETINGS));
     }
 
     // Phase 4: every meeting must be associated with the authenticated user.

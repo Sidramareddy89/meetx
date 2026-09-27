@@ -17,7 +17,7 @@ import {
   ShieldCheck,
   Zap
 } from 'lucide-react';
-import { useMeeting } from '../../contexts/MeetingContext';
+import { useMeeting, MAX_FREE_MEETINGS } from '../../contexts/MeetingContext';
 import { useAuth } from '../../contexts/AuthContext';
 
 export const ChoosePlanModal: React.FC = () => {
@@ -285,7 +285,7 @@ export const ChoosePlanModal: React.FC = () => {
             </div>
             <div className="flex items-center gap-2">
               <Check className="w-3.5 h-3.5 text-slate-400" />
-              <span>Limited free meetings (3 max)</span>
+              <span>Limited free meetings ({MAX_FREE_MEETINGS} max)</span>
             </div>
           </div>
         </div>

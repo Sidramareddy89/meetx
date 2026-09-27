@@ -659,7 +659,7 @@ const main = async () => {
   const keys = listKeys();
   check(
     'no second transcript store was created (per-user meeting lists only)',
-    keys.every((k) => /^meetx_(meetings_|is_pro|plan_type|free_meetings_left)/.test(k)),
+    keys.every((k) => /^meetx_(meetings_|is_pro|plan_type|free_meetings_(left|limit))/.test(k)),
     `keys=${keys.join(',')}`
   );
   const aStore = readStore(USER_A);
