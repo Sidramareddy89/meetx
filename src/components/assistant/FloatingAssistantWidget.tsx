@@ -196,22 +196,25 @@ export const FloatingAssistantWidget: React.FC = () => {
   const lastAutoAnsweredId = useRef<string | null>(null);
   const autoFollowRef = useRef(true);
 
-  // Auto-follow: every new opposite-side remark refreshes the active answer
-  // (What to say / Follow-up / Recap / Assist) so the widget follows the
-  // conversation in real time without another click.
+  // Auto-follow: every new participant remark produces its own answer for the
+  // active mode (What to say / Follow-up / Recap / Assist), so the widget keeps
+  // pace with the conversation without another click.
+  //
+  // There is deliberately NO isThinking gate and no debounce timer here: with
+  // both, a remark arriving while another answer was still in flight was
+  // dropped, and a burst of remarks collapsed into a single answer. Requests are
+  // serialized by askAssistant instead, so every remark is answered and the
+  // answers appear one by one.
   useEffect(() => {
-    if (!autoFollowRef.current || liveTranscript.length === 0 || isThinking) return;
+    if (!autoFollowRef.current || liveTranscript.length === 0) return;
     const last = liveTranscript[liveTranscript.length - 1];
     if (!last || last.id === lastAutoAnsweredId.current) return;
     if (last.id.endsWith('-t') === false && (last.translatedText || '').includes('translating')) return;
     lastAutoAnsweredId.current = last.id;
-    const timer = window.setTimeout(() => {
-      if (activeAssistantMode === 'whatToSay') askAssistant('What should I say right now to the interviewer/meeting?', 'say');
-      else if (activeAssistantMode === 'followUp') askAssistant('Give me smart follow-up questions to ask.', 'followup');
-      else if (activeAssistantMode === 'recap') askAssistant('Give me a quick recap of the conversation so far.', 'recap');
-      else askAssistant('Please assist me with key points and advice for this meeting.', 'assist');
-    }, 600);
-    return () => window.clearTimeout(timer);
+    if (activeAssistantMode === 'whatToSay') askAssistant('What should I say right now to the interviewer/meeting?', 'say');
+    else if (activeAssistantMode === 'followUp') askAssistant('Give me smart follow-up questions to ask.', 'followup');
+    else if (activeAssistantMode === 'recap') askAssistant('Give me a quick recap of the conversation so far.', 'recap');
+    else askAssistant('Please assist me with key points and advice for this meeting.', 'assist');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveTranscript.length]);
 

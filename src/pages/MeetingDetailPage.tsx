@@ -25,8 +25,8 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useMeeting } from '../contexts/MeetingContext';
 import { Meeting, getLanguageDisplayName } from '../types/meeting';
-import { getMeetingById } from '../services/meetingService';
-import { buildSummaryFromTranscript, buildShareableMinutes, buildLiveBrief, buildMeetingTranscriptContext } from '../services/meetingInsightService';
+import { getMeetingById, updateStoredMeeting } from '../services/meetingService';
+import { buildSummaryFromTranscript, buildShareableMinutes, buildLiveBrief, buildMeetingTranscriptContext, buildMeetingInsights } from '../services/meetingInsightService';
 
 const formatDateTime = (ts?: number): string => {
   if (!ts) return '';
@@ -109,10 +109,34 @@ export const MeetingDetailPage: React.FC = () => {
         sessionIsActiveForThisMeeting ? liveTranscript : []
       )
     : [];
-  const summary = meeting ? buildSummaryFromTranscript(meeting, transcript) : null;
+  // Prefer the insights STORED on the record (written on every transcript flush
+  // and on completion), and fall back to deriving them from the transcript for
+  // meetings saved before they were persisted. Nothing is invented: with no
+  // conversation both paths yield null and the page shows its honest empty state.
+  const storedSummary = meeting?.summary || null;
+  const derivedSummary = meeting ? buildSummaryFromTranscript(meeting, transcript) : null;
+  const summary = storedSummary || derivedSummary;
   const shareableText = meeting ? buildShareableMinutes(meeting, transcript) : '';
 
   const brief = meeting ? buildLiveBrief(meeting.topic || meeting.title, transcript) : null;
+  // Deadlines come from the stored record when present, otherwise from the brief.
+  const deadlines: { id: string; text: string; date?: string }[] =
+    brief && brief.deadlines.length
+      ? brief.deadlines
+      : (storedSummary?.deadlines || []).map((text, i) => ({ id: `stored-deadline-${i}`, text }));
+
+  // Backfill: a meeting whose record has no stored insights yet (saved before
+  // this existed, or stored offline) gets them derived and written once, so the
+  // stored record stops being empty.
+  useEffect(() => {
+    if (!meeting || storedSummary || transcript.length === 0 || !currentUser?.uid) return;
+    const insights = buildMeetingInsights(meeting, transcript);
+    if (!insights) return;
+    updateStoredMeeting(meeting.id, currentUser.uid, { summary: insights }).catch((err) =>
+      console.warn('Meeting insights backfill warning:', err)
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meeting?.id, storedSummary ? 'stored' : 'missing', transcript.length]);
 
   // Participants overview: remarks + first/last spoken line per speaker.
   const participantStats = Array.from(
@@ -615,12 +639,12 @@ export const MeetingDetailPage: React.FC = () => {
             <CalendarClock className="w-4 h-4 text-rose-500" />
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Deadlines</h3>
           </div>
-          {brief?.deadlines?.length ? (
+          {deadlines.length ? (
             <ul className="space-y-1.5">
-              {brief.deadlines.map((d) => (
+              {deadlines.map((d) => (
                 <li key={d.id} className="flex items-start gap-2 text-xs text-slate-700">
                   <span className="mt-0.5">⏰</span>
-                  <span><span className="font-semibold text-rose-600 mr-1">{d.date}</span>{d.text}</span>
+                  <span>{d.date ? <span className="font-semibold text-rose-600 mr-1">{d.date}</span> : null}{d.text}</span>
                 </li>
               ))}
             </ul>

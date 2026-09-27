@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
 import { Meeting, MeetingPlatform, SUPPORTED_LANGUAGES, SupportedLanguage, MeetingTranscriptEntry, MeetingResource } from '../types/meeting';
 import { generateAssistantResponse } from '../services/aiAssistantService';
-import { buildLiveBrief, buildMeetingTranscriptContext, mergeTranscriptEntriesById, LiveBrief, ConversationActionItem } from '../services/meetingInsightService';
+import { buildLiveBrief, buildMeetingTranscriptContext, buildMeetingInsights, mergeTranscriptEntriesById, LiveBrief, ConversationActionItem } from '../services/meetingInsightService';
 import { createMeetingId, updateStoredMeeting } from '../services/meetingService';
 import { useAuth } from './AuthContext';
 
@@ -222,11 +222,19 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       sessionTranscriptRef.current
     );
     sessionTranscriptRef.current = merged;
-    const updates: Partial<Pick<Meeting, 'transcript' | 'status' | 'duration'>> = {
+    const updates: Partial<Pick<Meeting, 'transcript' | 'status' | 'duration' | 'summary'>> = {
       transcript: merged,
       status,
     };
     if (duration !== undefined) updates.duration = duration;
+    // Store the insights (summary, key points, tasks, deadlines, reminders) on
+    // the record itself, derived from the transcript that is being written. This
+    // is what keeps a meeting from showing empty summary/task/deadline sections
+    // when it is reopened or read from Firestore. Null for a meeting with no
+    // speech: nothing is invented, and any previously stored insights are left
+    // untouched rather than being replaced with an empty object.
+    const insights = buildMeetingInsights({ ...session, transcript: merged }, merged);
+    if (insights) updates.summary = insights;
     return updateStoredMeeting(
       session.id,
       session.userId,
@@ -454,7 +462,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setLiveTranscript([]);
   };
 
-  const askAssistant = async (
+  const askAssistantRequest = async (
     queryOrAction: string,
     actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query' = 'query'
   ) => {
@@ -502,6 +510,32 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       setIsThinking(false);
     }
+  };
+
+  /**
+   * Every assistant request runs through this chain, so answers reach the widget
+   * ONE BY ONE in the order they were asked.
+   *
+   * Without it, a burst of participant remarks fired several LLM calls at once:
+   * they raced, the answers could land out of order, and a remark that arrived
+   * while another request was still in flight was dropped entirely (the
+   * auto-answer effect bailed on `isThinking` and never re-ran for it).
+   * A rejected request never wedges the chain, so one failure cannot silence
+   * every later answer.
+   */
+  const assistantQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const askAssistant = (
+    queryOrAction: string,
+    actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query' = 'query'
+  ): Promise<void> => {
+    const run = () => askAssistantRequest(queryOrAction, actionType);
+    const next = assistantQueueRef.current.then(run, run);
+    assistantQueueRef.current = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
   };
 
   // The conversation of the meeting that is active RIGHT NOW: the lines its

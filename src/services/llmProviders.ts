@@ -37,17 +37,27 @@ export const groqModels = (): string[] =>
     GROQ_DEFAULTS
   );
 
+/**
+ * How many recent remarks are sent to the model. The realtime answer has to be
+ * grounded in the WHOLE conversation while still reacting to the newest remark,
+ * so the window is wide enough to carry the discussion, not just the last few
+ * lines. A numbered, speaker-attributed line per remark.
+ */
+const MAX_TRANSCRIPT_LINES = 24;
+
 export const buildPrompt = (prompt: string, context: AssistantContext): string => {
-  const transcriptSnippet = context.transcript
-    .slice(-8)
-    .map((t) => {
-      const body =
-        t.translatedText && !t.translatedText.includes('translating')
-          ? t.translatedText
-          : t.text;
-      return `${t.speakerName || t.speakerId} [${t.timestamp}]: ${body}`;
-    })
-    .join('\n');
+  // Numbered so the newest remark can be pointed at by reference instead of by
+  // repeating its text (repeating a remark made it look like two statements).
+  const transcriptLines = context.transcript.slice(-MAX_TRANSCRIPT_LINES).map((t, i) => {
+    const body =
+      t.translatedText && !t.translatedText.includes('translating')
+        ? t.translatedText
+        : t.text;
+    return `${i + 1}. ${t.speakerName || t.speakerId} [${t.timestamp}]: ${body}`;
+  });
+  const transcriptSnippet = transcriptLines.join('\n');
+  // Which numbered remark the answer is about right now.
+  const latestLineNo = transcriptLines.length;
   const kbSnippet = (context.resources || [])
     .map((r) => {
       let body = r.content || '';
@@ -79,10 +89,12 @@ export const buildPrompt = (prompt: string, context: AssistantContext): string =
     `You are MEETX, an elite real-time multilingual AI meeting copilot.\n` +
     `Meeting Topic: "${context.topic}".\nLanguage: "${context.language}".\n` +
     `User Notes: "${(context.pastedNotes || '').slice(0, 1000)}"` +
-    `${kbBlock}Recent Transcript (real, live):\n${transcriptSnippet || '(no speech captured yet — microphone off, not permitted, or silent)'}\n\n` +
+    `${kbBlock}Recent Transcript (real, live, oldest first):\n${transcriptSnippet || '(no speech captured yet — microphone off, not permitted, or silent)'}\n\n` +
+    (latestLineNo ? `The participant just spoke remark #${latestLineNo} - answer THAT remark, using the rest of the conversation as context.\n\n` : '') +
     `Rules - REPLY FAST AND CONCISE: maximum 40 words or 3 short bullets. ` +
     `No preamble, no filler, no disclaimers, no repetition. Professional, ` +
     `speak-ready meeting tone. If asked what to say, start with "Say: ...". ` +
+    `Use the whole conversation above for context, and answer the most recent remark. ` +
     `${groundingRule}\n\n` +
     `User Question: ${prompt}`
   );

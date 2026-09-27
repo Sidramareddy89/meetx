@@ -74,11 +74,15 @@ const installFetch = () => {
     }
     requests.push({ url: urlStr, body });
     if (urlStr.includes('generativelanguage.googleapis.com')) {
+      // Echo the user question into the answer so ordering/one-by-one delivery
+      // can be asserted (the prefix is unchanged for the existing assertions).
+      const promptEcho = body && body.contents && body.contents[0] && body.contents[0].parts[0].text || '';
+      const question = (promptEcho.split('User Question:')[1] || '').trim();
       return {
         ok: true,
         status: 200,
         json: async () => ({
-          candidates: [{ content: { parts: [{ text: 'Grounded stub answer.' }] } }],
+          candidates: [{ content: { parts: [{ text: `Grounded stub answer: ${question.slice(0, 40)}` }] } }],
         }),
       };
     }
@@ -337,6 +341,40 @@ const main = async () => {
     userAStore.map((m) => m.id).join(',')
   );
   check('the assistant produced an answer for every question asked', lastAssistantText(ctx).length > 0);
+
+  // ------------------------- H (realtime answers go up ONE BY ONE, none dropped)
+  // A burst of participant remarks used to fire several LLM calls at once: they
+  // raced and could land out of order, and a remark that arrived while another
+  // request was still in flight was dropped entirely. askAssistant is now
+  // serialized, so every request is answered, in the order it was made.
+  const ctxBeforeQueue = (mountProvider().assistantMessages || []).length;
+  const burst = ['What did they just say?', 'What should I answer now?', 'What comes next?'];
+  // Fired WITHOUT awaiting, exactly like the auto-answer effect does when
+  // several remarks land in quick succession.
+  const inFlight = burst.map((q) => mountProvider().askAssistant(q, 'query'));
+  await Promise.all(inFlight);
+  ctx = mountProvider();
+  const queueMessages = (ctx.assistantMessages || []).slice(ctxBeforeQueue);
+  const assistantReplies = queueMessages.filter((m) => m.sender === 'assistant');
+  const userEchoes = queueMessages.filter((m) => m.sender === 'user');
+  check(
+    'a burst of questions produces one answer each (nothing dropped)',
+    assistantReplies.length === burst.length,
+    `asked=${burst.length} answered=${assistantReplies.length}`
+  );
+  check('each question is echoed to the user', userEchoes.length === burst.length, `echoed=${userEchoes.length}`);
+  check(
+    'the answers appear in the order the questions were asked',
+    burst.every((q, i) => {
+      const reply = assistantReplies[i];
+      return !!reply && reply.text.includes(q.slice(0, 12));
+    }),
+    assistantReplies.map((m) => m.text.slice(0, 40)).join(' | ')
+  );
+  check(
+    'no request is left thinking after the queue drains',
+    mountProvider().isThinking === false
+  );
 
   console.log(report.join('\n'));
   console.log(`\n${passed} passed, ${failed} failed`);

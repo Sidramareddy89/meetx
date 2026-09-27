@@ -245,6 +245,55 @@ const main = async () => {
     reopenedA1?.status === 'completed' && !!reopenedA1?.duration
   );
 
+  // ---------------------------------- stored insights (not empty sections)
+  const insights = reopenedA1?.summary;
+  check('case 1: the stored record carries a summary (it used to be undefined)', !!insights, `summary=${JSON.stringify(insights)}`);
+  check('case 1: the stored summary has a real overview', !!(insights && insights.overview && insights.overview.includes('Quarterly planning')), `overview=${insights && insights.overview ? insights.overview.slice(0, 60) : 'none'}`);
+  check(
+    'case 1: key points are stored',
+    !!(insights && insights.keyPoints && insights.keyPoints.length > 0),
+    `keyPoints=${insights && insights.keyPoints ? insights.keyPoints.length : 0}`
+  );
+  check(
+    'case 1: tasks/actions are stored (this conversation states no task, so the list is empty - never invented)',
+    !!(insights && Array.isArray(insights.actions)),
+    `actions=${insights && insights.actions ? insights.actions.length : 'missing'}`
+  );
+  check(
+    'case 1: the stored insights come from the real spoken lines',
+    JSON.stringify(insights || {}).includes('beta in March') || JSON.stringify(insights || {}).includes('pricing page')
+  );
+  check(
+    'case 1: deadlines is a stored array (empty here - nothing was said about one)',
+    !!(insights && Array.isArray(insights.deadlines)),
+    `deadlines=${insights && insights.deadlines}`
+  );
+  check('case 1: the insights record when they were derived', !!(insights && typeof insights.updatedAt === 'number'));
+
+  // A meeting with a real deadline must have it stored, not just derived at view time.
+  simulateReload();
+  let withDeadline = startNewMeeting('meet-insights-deadline', 'Launch sync');
+  withDeadline.ctx = addLines(withDeadline.ctx, [
+    entry('dl-1', 'We need to ship the beta by Friday.', 1),
+    entry('dl-2', 'Legal review is due next Friday.', 2),
+  ]);
+  fireEvent('pagehide');
+  await tick();
+  const deadlineRecord = storedLocal(USER_A, 'meet-insights-deadline');
+  check(
+    'a spoken deadline is stored on the record',
+    !!(deadlineRecord?.summary?.deadlines && deadlineRecord.summary.deadlines.length > 0),
+    `deadlines=${JSON.stringify(deadlineRecord?.summary?.deadlines)}`
+  );
+  check(
+    'a spoken action item is stored on the record',
+    !!(deadlineRecord?.summary?.actions && deadlineRecord.summary.actions.length > 0),
+    `actions=${JSON.stringify(deadlineRecord?.summary?.actions)}`
+  );
+  withDeadline.ctx = mountProvider();
+  withDeadline.ctx.stopMeetingSession();
+  await tick();
+
   // ------------------------------------------------------------- CASE 2
   report.push('--- CASE 2: resumed meeting ---');
   simulateReload();

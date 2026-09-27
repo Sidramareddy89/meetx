@@ -329,7 +329,7 @@ export async function getUserMeetings(userId: string): Promise<Meeting[]> {
 export async function updateStoredMeeting(
   meetingId: string,
   userId: string,
-  updates: Partial<Pick<Meeting, 'transcript' | 'status' | 'duration'>>,
+  updates: Partial<Pick<Meeting, 'transcript' | 'status' | 'duration' | 'summary'>>,
   fallbackMeeting?: Meeting
 ): Promise<void> {
   // 1. Local store (source of truth when Firebase is unconfigured)

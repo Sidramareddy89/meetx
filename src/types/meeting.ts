@@ -29,6 +29,15 @@ export interface MeetingSummary {
   overview?: string;
   keyPoints: string[];
   actions: string[];
+  /**
+   * Deadlines / important dates that were actually mentioned in the meeting.
+   * Optional so records saved before this field existed still load.
+   */
+  deadlines?: string[];
+  /** Short open questions / reminders extracted from the conversation. */
+  reminders?: string[];
+  /** When these insights were last derived from the stored transcript. */
+  updatedAt?: number;
 }
 
 export interface Meeting {

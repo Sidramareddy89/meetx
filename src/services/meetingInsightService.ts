@@ -62,6 +62,38 @@ export function buildSummaryFromTranscript(
 }
 
 /**
+ * The COMPLETE insight bundle for a meeting, in the shape that is STORED on the
+ * meeting record: overview, key points, action items (tasks), deadlines and
+ * reminders, all derived from the real transcript.
+ *
+ * This is what the persistence layer writes on every transcript flush and on the
+ * completion write, so a meeting reopened later (or read from Firestore on
+ * another device) carries its summary/tasks/deadlines instead of showing empty
+ * sections that have to be recomputed from nothing.
+ *
+ * Returns null for an empty transcript: with no speech there is nothing real to
+ * store, and nothing is invented.
+ */
+export function buildMeetingInsights(
+  meeting: Meeting,
+  transcript: MeetingTranscriptEntry[]
+): MeetingSummary | null {
+  const summary = buildSummaryFromTranscript(meeting, transcript || []);
+  if (!summary) return null;
+
+  const brief = buildLiveBrief(meeting.topic || meeting.title || 'Meeting', transcript || []);
+  return {
+    overview: summary.overview,
+    // Prefer the brief's richer extraction, fall back to the summary's own.
+    keyPoints: brief && brief.keyPoints.length ? brief.keyPoints : summary.keyPoints || [],
+    actions: brief && brief.actions.length ? brief.actions.map((a) => a.text) : summary.actions || [],
+    deadlines: brief ? brief.deadlines.map((d) => d.text) : [],
+    reminders: brief ? brief.reminders : [],
+    updatedAt: Date.now(),
+  };
+}
+
+/**
  * Human-readable minutes built from the actual stored data — used by the
  * share controls. Includes only real content; sections with no data are
  * omitted entirely.
