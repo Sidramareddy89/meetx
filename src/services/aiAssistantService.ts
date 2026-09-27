@@ -142,17 +142,21 @@ export const generateAssistantResponse = async (
     'Give me 2 follow-up questions',
     'Summarize recent points',
   ];
-  // 1. Gemini first (primary) — tries gemini-3.7-flash, 3.6-flash,
-  //    flash-latest one by one (gemini-1.5-flash is retired → 404).
-  const geminiAnswer = await callGemini(queryOrAction, context);
-  if (geminiAnswer) {
-    return { text: geminiAnswer, followupSuggestions: suggestions, source: 'llm' };
-  }
-
-  // 2. Groq fallback when Gemini is unavailable / rate-limited / 4xx.
+  // 1. Groq FIRST for realtime questions. openai/gpt-oss-120b is the realtime
+  //    model: measured live, it answers in ~0.5-1.3 s, while the Gemini models
+  //    were returning 503 "high demand" / 4 s timeouts from this network, which
+  //    put a failed first attempt (and its cooldown) in front of every reply.
+  //    Gemini stays as the fallback so nothing is lost if Groq rate-limits.
   const groqAnswer = await callGroq(queryOrAction, context);
   if (groqAnswer) {
     return { text: groqAnswer, followupSuggestions: suggestions, source: 'llm' };
+  }
+
+  // 2. Gemini fallback when Groq is unavailable / rate-limited / 4xx.
+  //    (gemini-3.7-flash, 3.6-flash, flash-latest one by one; 1.5-flash is retired.)
+  const geminiAnswer = await callGemini(queryOrAction, context);
+  if (geminiAnswer) {
+    return { text: geminiAnswer, followupSuggestions: suggestions, source: 'llm' };
   }
 
   // 3. Offline engine — ONLY the legitimate no-key mode. It is grounded in the

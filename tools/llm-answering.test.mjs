@@ -123,6 +123,7 @@ const installFetch = () => {
 
     if (urlStr.includes('api.groq.com')) {
       const mode = script.groq;
+      if (mode === 'fail429') return { ok: false, status: 429, json: async () => ({ error: { code: 429 } }) };
       if (mode === 'fail500') return { ok: false, status: 500, json: async () => ({ error: { code: 500 } }) };
       if (mode === 'empty') return { ok: true, status: 200, json: async () => groqPayload('') };
       if (mode === 'timeout') {
@@ -180,43 +181,55 @@ const main = async () => {
   const answer = await generateAssistantResponse(question, 'query', makeContext());
   const latencyMs = Date.now() - startedAt;
 
-  check('the question is sent to the real Gemini endpoint', geminiCalls().length >= 1 && geminiCalls()[0].url.includes(':generateContent'));
-  check('the Gemini request carries the meeting transcript context', (geminiCalls()[0]?.body?.contents?.[0]?.parts?.[0]?.text || '').includes(T1.text));
-  check('the reply is the actual model-generated answer', answer.text.startsWith('Gemini answer grounded in:'), answer.text.slice(0, 60));
+  check('the question is sent to the real Groq endpoint', groqCalls().length >= 1 && groqCalls()[0].url.includes('/chat/completions'));
+  check(
+    'the Groq request carries the meeting transcript context',
+    (groqCalls()[0]?.body?.messages?.[1]?.content || '').includes(T1.text)
+  );
+  check(
+    'the realtime model is openai/gpt-oss-120b',
+    groqCalls()[0]?.body?.model === 'openai/gpt-oss-120b',
+    String(groqCalls()[0]?.body?.model)
+  );
+  check('the reply is the actual model-generated answer', answer.text.startsWith('Groq answer grounded in:'), answer.text.slice(0, 60));
   check('a model answer is labelled as LLM-sourced', answer.source === 'llm', answer.source);
   check('actual provider latency is measured (no fixed-100ms claim)', latencyMs > 0 && getLlmDiagnostics().every((d) => d.latencyMs >= 0), `measured=${latencyMs}ms`);
 
-  // --------------------------------------- 2. provider order Gemini → Groq
+  // --------------------------------------- 2. realtime provider order Groq first
   const firstGemini = script.calls.findIndex((c) => c.url.includes('generativelanguage.googleapis.com'));
   const firstGroq = script.calls.findIndex((c) => c.url.includes('api.groq.com'));
-  check('Gemini is attempted and Groq is not needed when Gemini answers', firstGemini === 0 && firstGroq === -1, `gemini@${firstGemini} groq@${firstGroq}`);
+  check(
+    'Groq is attempted first and Gemini is not needed when Groq answers',
+    firstGroq === 0 && firstGemini === -1,
+    `groq@${firstGroq} gemini@${firstGemini}`
+  );
 
-  // --------------------------------- 3. Groq failover when Gemini rate-limits
-  script.gemini = 'fail429';
-  script.groq = 'ok';
+  // --------------------------------- 3. Gemini fallback when Groq rate-limits
+  script.groq = 'fail429';
+  script.gemini = 'ok';
   resetRun();
   const failover = await generateAssistantResponse('Summarize the conversation so far.', 'query', makeContext());
   check(
-    'a Gemini 429 fast-fails to the Groq fallback',
-    geminiCalls().length === 1 && groqCalls().length >= 1,
-    `gemini=${geminiCalls().length} groq=${groqCalls().length}`
+    'a Groq 429 fast-fails to the Gemini fallback',
+    groqCalls().length === 1 && geminiCalls().length >= 1,
+    `groq=${groqCalls().length} gemini=${geminiCalls().length}`
   );
-  check('the Groq answer is the model-generated text', failover.text.startsWith('Groq answer grounded in:'), failover.text.slice(0, 60));
+  check('the Gemini answer is the model-generated text', failover.text.startsWith('Gemini answer grounded in:'), failover.text.slice(0, 60));
   check('the failover answer is labelled as LLM-sourced', failover.source === 'llm', failover.source);
   check(
-    'diagnostics record the Gemini rate-limit and the Groq success',
-    getLlmDiagnostics().some((d) => d.provider === 'gemini' && d.errorCategory === 'rate-limit' && d.httpStatus === 429) &&
-      getLlmDiagnostics().some((d) => d.provider === 'groq' && d.ok === true),
+    'diagnostics record the Groq rate-limit and the Gemini success',
+    getLlmDiagnostics().some((d) => d.provider === 'groq' && d.errorCategory === 'rate-limit' && d.httpStatus === 429) &&
+      getLlmDiagnostics().some((d) => d.provider === 'gemini' && d.ok === true),
     JSON.stringify(getLlmDiagnostics())
   );
 
-  // ------------------------------------- 4. Gemini timeout → Groq, no offline text
-  script.gemini = 'timeout';
-  script.groq = 'ok';
+  // ------------------------------------- 4. Groq timeout → Gemini, no offline text
+  script.groq = 'timeout';
+  script.gemini = 'ok';
   resetRun();
   const afterTimeout = await generateAssistantResponse('Explain the last topic simply.', 'query', makeContext());
-  check('a Gemini timeout still reaches Groq', groqCalls().length >= 1, `groq=${groqCalls().length}`);
-  check('the timeout is classified in diagnostics', getLlmDiagnostics().some((d) => d.provider === 'gemini' && d.errorCategory === 'timeout'), JSON.stringify(getLlmDiagnostics()));
+  check('a Groq timeout still reaches Gemini', geminiCalls().length >= 1, `gemini=${geminiCalls().length}`);
+  check('the timeout is classified in diagnostics', getLlmDiagnostics().some((d) => d.provider === 'groq' && d.errorCategory === 'timeout'), JSON.stringify(getLlmDiagnostics()));
   check('no offline template text is used after a provider timeout', !afterTimeout.text.includes('based on the live conversation so far'));
 
   // ------------------------------- 5. both providers fail → truthful error
@@ -231,7 +244,7 @@ const main = async () => {
     getLlmDiagnostics().some((d) => d.errorCategory === 'server-error' && d.httpStatus === 500),
     JSON.stringify(getLlmDiagnostics())
   );
-  check('Groq is still attempted after Gemini fails', geminiCalls().length >= 1 && groqCalls().length >= 1);
+  check('Gemini is still attempted after Groq fails', groqCalls().length >= 1 && geminiCalls().length >= 1);
 
   // -------------------------------------- 6. no keys → legitimate offline mode
   localStorage.removeItem('meetx_gemini_api_key');
@@ -262,9 +275,52 @@ const main = async () => {
   resetRun();
   await generateAssistantResponse('ping', 'query', makeContext());
   check(
-    'Groq tries its configured first model when Gemini 404s through',
+    'Groq uses its configured realtime model openai/gpt-oss-120b',
     groqCalls().length >= 1 && groqCalls()[0].body.model === 'openai/gpt-oss-120b',
     groqCalls().map((c) => c.body && c.body.model).join(',')
+  );
+  check(
+    'Gemini is not called at all while the realtime model answers',
+    geminiCalls().length === 0,
+    `gemini=${geminiCalls().length}`
+  );
+
+  // ------------------------- 8. an empty transcript must not produce a refusal
+  // This is the "no transcript given" bug: with no speech captured the prompt
+  // used to instruct the model to answer strictly from the transcript, so it
+  // refused instead of helping.
+  script.groq = 'ok';
+  script.gemini = 'ok';
+  resetRun();
+  const emptyContext = { ...makeContext(), transcript: [] };
+  await generateAssistantResponse('What should I say next?', 'say', emptyContext);
+  const emptyPrompt = groqCalls()[0]?.body?.messages?.[1]?.content || '';
+  check(
+    'an empty transcript is stated honestly in the prompt',
+    emptyPrompt.includes('no speech captured yet'),
+    emptyPrompt.slice(0, 120)
+  );
+  check(
+    'with no transcript the model is told to answer, never to refuse',
+    /NO TRANSCRIPT HAS BEEN CAPTURED YET/i.test(emptyPrompt) && /Never refuse/i.test(emptyPrompt)
+  );
+  check(
+    'with no transcript the model is pointed at the topic and notes it CAN use',
+    emptyPrompt.includes('Beta planning') && emptyPrompt.includes('Focus on the launch checklist.')
+  );
+  check(
+    'the system prompt forbids replying that no transcript was given',
+    /Never reply that you were given no transcript/.test(groqCalls()[0]?.body?.messages?.[0]?.content || '')
+  );
+
+  resetRun();
+  await generateAssistantResponse('What was discussed?', 'query', makeContext());
+  const withTranscript = groqCalls()[0]?.body?.messages?.[1]?.content || '';
+  check(
+    'when a transcript exists the prompt still grounds on it (unchanged behaviour)',
+    withTranscript.includes(T1.text) && withTranscript.includes('Answer strictly from the transcript') &&
+      !withTranscript.includes('NO TRANSCRIPT HAS BEEN CAPTURED YET'),
+    withTranscript.slice(-160)
   );
 
   // ------------------------------------ 8. no keys or headers are ever logged

@@ -85,9 +85,42 @@ const main = async () => {
     console.log('');
   }
 
-  console.log(`${llmAnswers}/${QUESTIONS.length} answered by a real LLM`);
-  console.log(llmAnswers === QUESTIONS.length ? 'RESULT: live LLM answering works' : 'RESULT: some questions fell back');
-  process.exit(llmAnswers === QUESTIONS.length ? 0 : 1);
+  // The bug the user reported: asking a realtime question BEFORE any speech was
+  // captured used to come back as "no transcript given". The answer must be a
+  // real, useful, LLM-generated one.
+  console.log('--- no transcript captured yet (the reported failure) ---');
+  clearLlmDiagnostics();
+  const noTranscriptStarted = Date.now();
+  const noTranscript = await generateAssistantResponse(
+    'What should I say next?',
+    'say',
+    { ...CONTEXT, transcript: [] }
+  );
+  const noTranscriptWall = Date.now() - noTranscriptStarted;
+  const noTranscriptServed = getLlmDiagnostics().find((d) => d.ok);
+  const refusal =
+    /no transcript|not been (given|captured)|no speech (given|captured)/i.test(noTranscript.text) &&
+    !/turn on the microphone|switch on the microphone|enable the mic/i.test(noTranscript.text);
+  if (noTranscript.source === 'llm') llmAnswers += 1;
+  console.log('Q: What should I say next?   (transcript: empty)');
+  console.log(`   source    : ${noTranscript.source}`);
+  console.log(
+    `   served by : ${noTranscriptServed ? `${noTranscriptServed.provider}/${noTranscriptServed.model} (attempt ${noTranscriptServed.latencyMs}ms, http ${noTranscriptServed.httpStatus ?? '-'})` : 'none'}`
+  );
+  console.log(`   wall time : ${noTranscriptWall}ms`);
+  console.log(`   answer    : ${noTranscript.text.replace(/\s+/g, ' ').slice(0, 220)}`);
+  console.log(`   refused?  : ${refusal ? 'YES (bug)' : 'no - it answered'}`);
+  console.log('');
+
+  const total = QUESTIONS.length + 1;
+  console.log(`${llmAnswers}/${total} answered by a real LLM`);
+  if (refusal) console.log('RESULT: the empty-transcript case still refuses');
+  console.log(
+    llmAnswers === total && !refusal
+      ? 'RESULT: live LLM answering works (including the no-transcript case)'
+      : 'RESULT: some questions fell back'
+  );
+  process.exit(llmAnswers === total && !refusal ? 0 : 1);
 };
 
 main().catch((err) => {

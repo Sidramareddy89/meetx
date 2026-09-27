@@ -12,6 +12,9 @@ interface Props {
   copiedId: string | null;
   onCopy: (id: string, text: string) => void;
   onQuickAction: (mode: 'whatToSay' | 'followUp' | 'recap') => void;
+  /** Real recognizer state, so an empty pane explains WHY there is no speech. */
+  isListening?: boolean;
+  isSupported?: boolean;
 }
 
 export const LiveConversationPane: React.FC<Props> = ({
@@ -19,15 +22,29 @@ export const LiveConversationPane: React.FC<Props> = ({
   onCopy,
   copiedId,
   onQuickAction,
+  isListening,
+  isSupported,
 }) => {
   if (liveTranscript.length === 0) {
+    // The assistant is asked questions from this meeting, so an empty pane must
+    // say what is actually wrong instead of implying it is always listening:
+    // a silent pane here is why the AI used to reply "no transcript given".
+    const unsupported = isSupported === false;
+    const head = unsupported
+      ? 'Speech recognition is not available in this browser.'
+      : isListening === false
+        ? 'The microphone is off — no speech is being captured.'
+        : 'Listening for the other side… speak now.';
+    const hint = unsupported
+      ? 'Open MEETX in Chrome or Edge (with mic permission) to capture the conversation. The AI can still answer from your topic, notes and documents until then.'
+      : isListening === false
+        ? 'Turn the microphone on in MEETX so the live conversation — and therefore the AI answers — are based on what is actually being said.'
+        : 'Chrome/Edge + mic permission required. Each remark appears here instantly.';
     return (
       <div className="py-4 text-center text-slate-400 flex flex-col items-center gap-1.5">
-        <Mic className="w-4 h-4 text-emerald-400 animate-pulse" />
-        <span>Listening for the other side… speak now.</span>
-        <span className="text-[10px] text-slate-500">
-          Chrome/Edge + mic permission required. Each remark appears here instantly.
-        </span>
+        <Mic className={`w-4 h-4 ${isListening === false ? 'text-slate-500' : 'text-emerald-400 animate-pulse'}`} />
+        <span>{head}</span>
+        <span className="text-[10px] text-slate-500">{hint}</span>
       </div>
     );
   }

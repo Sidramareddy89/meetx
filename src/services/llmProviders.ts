@@ -63,15 +63,27 @@ export const buildPrompt = (prompt: string, context: AssistantContext): string =
     .filter((b) => b.trim())
     .join('\n\n');
   const kbBlock = kbSnippet ? `\nKnowledge Base (uploaded documents):\n${kbSnippet}\n` : '';
+  // Whether real speech was captured is the single most important fact about
+  // the request: when it was not, the model must still be useful (answer from
+  // the topic/notes/documents and say how to enable grounding) instead of
+  // refusing with "no transcript given", which is what the previous wording
+  // ("Answer strictly from the transcript") produced in the widget.
+  const hasTranscript = transcriptSnippet.trim().length > 0;
+  const groundingRule = hasTranscript
+    ? 'Answer strictly from the transcript; if info is missing, say so in one line.'
+    : 'NO TRANSCRIPT HAS BEEN CAPTURED YET. Never refuse and never say you were given no ' +
+      'transcript. Answer from the meeting topic, the user notes and the uploaded documents, ' +
+      'then close with one short line telling the user to turn on the microphone so answers ' +
+      'are grounded in the live conversation.';
   return (
     `You are MEETX, an elite real-time multilingual AI meeting copilot.\n` +
     `Meeting Topic: "${context.topic}".\nLanguage: "${context.language}".\n` +
     `User Notes: "${(context.pastedNotes || '').slice(0, 1000)}"` +
-    `${kbBlock}Recent Transcript (real, live):\n${transcriptSnippet || '(None yet)'}\n\n` +
+    `${kbBlock}Recent Transcript (real, live):\n${transcriptSnippet || '(no speech captured yet — microphone off, not permitted, or silent)'}\n\n` +
     `Rules - REPLY FAST AND CONCISE: maximum 40 words or 3 short bullets. ` +
     `No preamble, no filler, no disclaimers, no repetition. Professional, ` +
     `speak-ready meeting tone. If asked what to say, start with "Say: ...". ` +
-    `Answer strictly from the transcript; if info is missing, say so in one line.\n\n` +
+    `${groundingRule}\n\n` +
     `User Question: ${prompt}`
   );
 };
@@ -249,7 +261,7 @@ export async function callGroq(prompt: string, context: AssistantContext): Promi
             {
               role: 'system',
               content:
-                'You are MEETX, an elite real-time multilingual AI meeting copilot. REPLY FAST AND CONCISE: max 40 words or 3 short bullets, no preamble, no filler, professional speak-ready tone. If asked what to say, start with Say: ... Answer strictly from the transcript.',
+                'You are MEETX, an elite real-time multilingual AI meeting copilot. REPLY FAST AND CONCISE: max 40 words or 3 short bullets, no preamble, no filler, professional speak-ready tone. If asked what to say, start with Say: ... Ground your answer in the transcript when one has been captured; when none has, still answer from the topic and notes and say how to enable the mic. Never reply that you were given no transcript.',
             },
             { role: 'user', content: fullPrompt },
           ],

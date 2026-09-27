@@ -219,7 +219,7 @@ export const FloatingAssistantWidget: React.FC = () => {
   // Initialize Speech-to-Text + real-time translation.
   // Voice -> text -> (translated) -> LLM answer: when a voice question is
   // detected, route it to the assistant for a text answer.
-  const { startListening, stopListening, isTranslating } = useSpeechToText({
+  const { startListening, stopListening, isTranslating, isListening, isSupported } = useSpeechToText({
     language: selectedLanguage.code,
     targetLanguage: translationEnabled ? targetLanguage.code : undefined,
     speakTranslations,
@@ -541,7 +541,7 @@ export const FloatingAssistantWidget: React.FC = () => {
           </div>
           {/* Response Feed & Live Meeting Follow-up stream with Dynamic Height */}
           {liveTab === 'conversation' ? (
-              <LiveConversationPane liveTranscript={currentMeetingTranscript} liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} copiedId={copiedId} onCopy={handleCopy} onQuickAction={(m) => { setLiveTab('answers'); handleAssistantModeChange(m); }} />
+              <LiveConversationPane liveTranscript={currentMeetingTranscript} liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} copiedId={copiedId} onCopy={handleCopy} onQuickAction={(m) => { setLiveTab('answers'); handleAssistantModeChange(m); }} isListening={isListening} isSupported={isSupported} />
             ) : liveTab === 'brief' ? (
               <LiveBriefPane liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} />
             ) : (

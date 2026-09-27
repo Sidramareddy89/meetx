@@ -294,10 +294,16 @@ const main = async () => {
   const promptC = lastPrompt();
   check(
     'E: an empty meeting sends no transcript and fabricates nothing',
-    promptC.includes('(None yet)') && [P1, P2, Q1, L1, L2, R1].every((e) => !promptC.includes(e.text)),
+    promptC.includes('(no speech captured yet') && [P1, P2, Q1, L1, L2, R1].every((e) => !promptC.includes(e.text)),
     promptC.slice(promptC.indexOf('Recent Transcript'), promptC.indexOf('Recent Transcript') + 120)
   );
   check('E: the meeting topic is still provided', promptC.includes('Empty meeting'));
+  // F4 must not turn an empty meeting into a refusal: the model is told to
+  // answer from the topic/notes and to point the user at the microphone.
+  check(
+    'E: an empty meeting is answered, not refused',
+    /NO TRANSCRIPT HAS BEEN CAPTURED YET/i.test(promptC) && /Never refuse/i.test(promptC)
+  );
 
   localStorage.removeItem('meetx_gemini_api_key');
   ctx = mountProvider();
