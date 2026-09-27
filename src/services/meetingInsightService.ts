@@ -113,34 +113,59 @@ export function buildShareableMinutes(
  * This is only ever called with the transcript of ONE meeting (the currently
  * selected/resumed one), so no other meeting can contribute context.
  */
+export function mergeTranscriptEntriesById(
+  base: MeetingTranscriptEntry[] | undefined,
+  incoming: MeetingTranscriptEntry[] | undefined
+): MeetingTranscriptEntry[] {
+  const merged: MeetingTranscriptEntry[] = [];
+  const indexById = new Map<string, number>();
+  // Base ids a completed translation has already taken over.
+  const superseded = new Set<string>();
+
+  const add = (entry: MeetingTranscriptEntry): void => {
+    if (!entry || !(entry.text || '').trim()) return;
+    const id = entry.id;
+    const isTranslated = id.endsWith('-t') && id.length > 2;
+    const targetId = isTranslated ? id.slice(0, -2) : id;
+
+    if (isTranslated && superseded.has(targetId)) {
+      // A newer translation of an already-translated line: replace in place.
+      const at = indexById.get(id);
+      if (at !== undefined) merged[at] = entry;
+      return;
+    }
+    if (isTranslated) {
+      // A completed translation takes the place of the untranslated line it
+      // replaces, so one remark can never be stored/displayed twice.
+      const at = indexById.get(targetId);
+      superseded.add(targetId);
+      indexById.set(id, at === undefined ? merged.length : at);
+      if (at === undefined) merged.push(entry);
+      else merged[at] = entry;
+      return;
+    }
+    const at = indexById.get(id);
+    if (at === undefined) {
+      indexById.set(id, merged.length);
+      merged.push(entry);
+    } else {
+      merged[at] = entry;
+    }
+  };
+
+  for (const entry of base || []) add(entry);
+  for (const entry of incoming || []) add(entry);
+  return merged;
+}
+
 export function buildMeetingTranscriptContext(
   persistedTranscript: MeetingTranscriptEntry[] | undefined,
   liveTranscript: MeetingTranscriptEntry[] | undefined
 ): MeetingTranscriptEntry[] {
-  const persisted = (persistedTranscript || []).filter((e) => Boolean(e && (e.text || '').trim()));
-  const live = (liveTranscript || []).filter((e) => Boolean(e && (e.text || '').trim()));
-
-  if (persisted.length === 0) return live;
-  if (live.length === 0) return persisted;
-
-  const merged: MeetingTranscriptEntry[] = [];
-  const indexById = new Map<string, number>();
-  for (const entry of persisted) {
-    indexById.set(entry.id, merged.length);
-    merged.push(entry);
-  }
-  for (const entry of live) {
-    const existingIndex = indexById.get(entry.id);
-    if (existingIndex === undefined) {
-      indexById.set(entry.id, merged.length);
-      merged.push(entry);
-    } else {
-      // Same remark id (e.g. a live line already present in the stored
-      // transcript) — replace in place instead of duplicating it.
-      merged[existingIndex] = entry;
-    }
-  }
-  return merged;
+  // PERSISTENCE + DISPLAY + ASSISTANT CONTEXT all merge through the single
+  // rule above, so the conversation a meeting stores, the conversation the
+  // user sees live and the conversation the assistant reads can never diverge.
+  return mergeTranscriptEntriesById(persistedTranscript, liveTranscript);
 }
 
 // ---- Real-time conversation intelligence (all derived from actual speech) ----

@@ -145,6 +145,7 @@ export const FloatingAssistantWidget: React.FC = () => {
     speakTranslations,
     setSpeakTranslations,
     liveTranscript,
+    currentMeetingTranscript,
     liveBrief,
     checkedActions,
     toggleActionCheck,
@@ -535,12 +536,12 @@ export const FloatingAssistantWidget: React.FC = () => {
           {/* Live tab switcher: Answers | Conversation | Brief */}
           <div className="px-4 pt-2 flex items-center gap-1.5 text-[11px]">
             <button type="button" onClick={() => setLiveTab('answers')} className={'px-2.5 py-1 rounded-lg border font-semibold transition-colors cursor-pointer ' + (liveTab === 'answers' ? 'bg-blue-600/20 border-blue-400/40 text-blue-200' : 'bg-slate-800/60 border-slate-700/60 text-slate-400 hover:text-white')}>Answers</button>
-            <button type="button" onClick={() => setLiveTab('conversation')} className={'px-2.5 py-1 rounded-lg border font-semibold transition-colors cursor-pointer ' + (liveTab === 'conversation' ? 'bg-blue-600/20 border-blue-400/40 text-blue-200' : 'bg-slate-800/60 border-slate-700/60 text-slate-400 hover:text-white')}>Live conversation ({liveTranscript.length})</button>
+            <button type="button" onClick={() => setLiveTab('conversation')} className={'px-2.5 py-1 rounded-lg border font-semibold transition-colors cursor-pointer ' + (liveTab === 'conversation' ? 'bg-blue-600/20 border-blue-400/40 text-blue-200' : 'bg-slate-800/60 border-slate-700/60 text-slate-400 hover:text-white')}>Live conversation ({currentMeetingTranscript.length})</button>
             <button type="button" onClick={() => setLiveTab('brief')} className={'px-2.5 py-1 rounded-lg border font-semibold transition-colors cursor-pointer ' + (liveTab === 'brief' ? 'bg-blue-600/20 border-blue-400/40 text-blue-200' : 'bg-slate-800/60 border-slate-700/60 text-slate-400 hover:text-white')}>Title-Summary-Actions</button>
           </div>
           {/* Response Feed & Live Meeting Follow-up stream with Dynamic Height */}
           {liveTab === 'conversation' ? (
-              <LiveConversationPane liveTranscript={liveTranscript} liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} copiedId={copiedId} onCopy={handleCopy} onQuickAction={(m) => { setLiveTab('answers'); handleAssistantModeChange(m); }} />
+              <LiveConversationPane liveTranscript={currentMeetingTranscript} liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} copiedId={copiedId} onCopy={handleCopy} onQuickAction={(m) => { setLiveTab('answers'); handleAssistantModeChange(m); }} />
             ) : liveTab === 'brief' ? (
               <LiveBriefPane liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} />
             ) : (

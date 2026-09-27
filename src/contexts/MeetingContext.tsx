@@ -1,7 +1,7 @@
-import React, { createContext, useContext, useState, useRef } from 'react';
+import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
 import { Meeting, MeetingPlatform, SUPPORTED_LANGUAGES, SupportedLanguage, MeetingTranscriptEntry, MeetingResource } from '../types/meeting';
 import { generateAssistantResponse } from '../services/aiAssistantService';
-import { buildLiveBrief, buildMeetingTranscriptContext, LiveBrief, ConversationActionItem } from '../services/meetingInsightService';
+import { buildLiveBrief, buildMeetingTranscriptContext, mergeTranscriptEntriesById, LiveBrief, ConversationActionItem } from '../services/meetingInsightService';
 import { createMeetingId, updateStoredMeeting } from '../services/meetingService';
 import { useAuth } from './AuthContext';
 
@@ -55,6 +55,11 @@ interface MeetingContextType {
 
   // Live Session & Resources
   liveTranscript: MeetingTranscriptEntry[];
+  /** Every remark THIS meeting owns: the lines already stored on its record
+   *  plus the lines captured in the current session, merged and deduplicated
+   *  by transcript-entry id. This is what the Live Conversation displays, and
+   *  it can only ever belong to the meeting that is active right now. */
+  currentMeetingTranscript: MeetingTranscriptEntry[];
   addTranscriptEntry: (entry: MeetingTranscriptEntry) => void;
   clearTranscript: () => void;
   liveBrief: LiveBrief | null;
@@ -141,6 +146,17 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // ACTUAL conversation (never lost if the session ends unexpectedly).
   const transcriptSaveTimer = useRef<number | null>(null);
   const activeMeetingRef = useRef<Meeting | null>(null);
+  // The conversation the meeting record ALREADY owns when this session starts
+  // (empty for a brand-new meeting, A1..A3 for a resumed one). It is the fixed
+  // baseline every new line is merged onto, so persistence can never write the
+  // few lines of this session in place of the stored conversation.
+  const sessionBaseTranscriptRef = useRef<MeetingTranscriptEntry[]>([]);
+  // The authoritative transcript of the ACTIVE meeting (baseline + this
+  // session's lines, deduplicated by entry id). It is the only list written to
+  // the meeting record: the debounced flush, the pagehide flush and the
+  // completion write all persist exactly this.
+  const sessionTranscriptRef = useRef<MeetingTranscriptEntry[]>([]);
+  const sessionStartTimeRef = useRef<number>(Date.now());
 
   const increaseCardSize = () => {
     if (answerCardSize === 'compact') setAnswerCardSize('normal');
@@ -159,33 +175,69 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setIsPlanModalOpen(false);
   };
 
-  const persistTranscriptDebounced = (entries: MeetingTranscriptEntry[]) => {
+  /**
+   * Persist the ACTIVE meeting's complete transcript right now (no debounce).
+   *
+   * The payload is always the merged transcript of the current meeting (the
+   * lines its record already held + the lines captured in this session), so a
+   * resumed meeting keeps its conversation and a session that captured nothing
+   * still completes with the lines the meeting already had.
+   * `updateStoredMeeting` merges again on write, which makes this idempotent
+   * and safe to call from the debounce, the pagehide handler and the stop
+   * action alike.
+   */
+  const flushTranscriptNow = (
+    status: 'live' | 'completed' = 'live',
+    duration?: string
+  ): Promise<void> => {
+    // F2: flush against the live session snapshot (ref, not a stale closure)
+    // so the authoritative id/userId are always the ones from session start.
+    const session = activeMeetingRef.current;
+    if (!session?.id || !session?.userId) return Promise.resolve();
+    const merged = mergeTranscriptEntriesById(
+      sessionBaseTranscriptRef.current,
+      sessionTranscriptRef.current
+    );
+    sessionTranscriptRef.current = merged;
+    const updates: Partial<Pick<Meeting, 'transcript' | 'status' | 'duration'>> = {
+      transcript: merged,
+      status,
+    };
+    if (duration !== undefined) updates.duration = duration;
+    return updateStoredMeeting(
+      session.id,
+      session.userId,
+      updates,
+      // F2: create the record from this snapshot if the background initial
+      // save has not landed yet, instead of silently dropping the flush.
+      { ...session, ...updates }
+    ).catch((err) => {
+      console.warn('Transcript persist warning:', err);
+    });
+  };
+
+  const persistTranscriptDebounced = () => {
     if (transcriptSaveTimer.current) {
       window.clearTimeout(transcriptSaveTimer.current);
       transcriptSaveTimer.current = null;
     }
-    transcriptSaveTimer.current = window.setTimeout(async () => {
+    transcriptSaveTimer.current = window.setTimeout(() => {
       transcriptSaveTimer.current = null;
-      // F2: flush against the live session snapshot (ref, not a stale closure)
-      // so the authoritative id/userId are always the ones from session start.
-      const session = activeMeetingRef.current;
-      if (!session?.id || !session?.userId || entries.length === 0) return;
-      try {
-        await updateStoredMeeting(
-          session.id,
-          session.userId,
-          {
-            transcript: entries,
-            status: 'live',
-          },
-          // F2: create the record from this snapshot if the background initial
-          // save has not landed yet, instead of silently dropping the flush.
-          session
-        );
-      } catch (err) {
-        console.warn('Transcript persist warning:', err);
-      }
+      void flushTranscriptNow('live');
     }, 1200);
+  };
+
+  /**
+   * Add the time measured in this session to the duration already stored on the
+   * meeting, so a resumed meeting reports its total time instead of only the
+   * length of the last session. Only the `Xm Ys` format this app writes is
+   * understood; anything else is replaced by the measured value.
+   */
+  const addStoredDuration = (stored: string | undefined, sessionSeconds: number): string => {
+    const match = /(\d+)\s*m\s*(\d+)\s*s/.exec(stored || '');
+    const previous = match ? Number(match[1]) * 60 + Number(match[2]) : 0;
+    const total = previous + Math.max(0, sessionSeconds);
+    return `${Math.floor(total / 60)}m ${total % 60}s`;
   };
 
   const addTranscriptEntry = (entry: MeetingTranscriptEntry) => {
@@ -205,14 +257,28 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } else {
         next = [...prev, entry];
       }
-      persistTranscriptDebounced(next);
+      // The authoritative transcript of THIS meeting = what its record already
+      // holds + the lines captured so far. Both the debounced flush and the
+      // stop write use this list, never the session-only one, so a resumed
+      // meeting grows its conversation instead of replacing it.
+      sessionTranscriptRef.current = mergeTranscriptEntriesById(
+        sessionBaseTranscriptRef.current,
+        next
+      );
+      persistTranscriptDebounced();
       if (briefTimer.current) window.clearTimeout(briefTimer.current);
       const snapshot = next;
       briefTimer.current = window.setTimeout(() => {
         briefTimer.current = null;
         try {
           const topic = activeMeetingRef.current?.topic || 'Active Meeting';
-          const brief = buildLiveBrief(topic, snapshot);
+          // Built from the corrected conversation of this meeting (stored lines
+          // + this session's lines), so a resumed meeting's brief is not limited
+          // to the few remarks captured since it was reopened.
+          const brief = buildLiveBrief(
+            topic,
+            mergeTranscriptEntriesById(sessionBaseTranscriptRef.current, snapshot)
+          );
           if (brief) setLiveBrief(brief);
         } catch (err) {
           console.warn('Live brief build warning:', err);
@@ -223,6 +289,9 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const clearTranscript = () => {
+    // Only the live view is reset. The meeting's stored conversation is never
+    // touched here, and the lines already captured stay in the session
+    // transcript that persistence writes.
     setLiveTranscript([]);
   };
 
@@ -298,6 +367,14 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setLiveBrief(null);
     setCheckedActions(new Set());
     setSessionStartTime(Date.now());
+    // Persistence baseline for this session: the conversation this meeting
+    // record ALREADY owns (A1..A3 for a resumed meeting, [] for a new one).
+    // Every line captured from now on is merged onto it, so the record can only
+    // ever grow and a resume can never trade the stored conversation for the
+    // handful of lines spoken in this session.
+    sessionBaseTranscriptRef.current = mergeTranscriptEntriesById(newMeeting.transcript, []);
+    sessionTranscriptRef.current = sessionBaseTranscriptRef.current;
+    sessionStartTimeRef.current = Date.now();
     setLiveTranscript([]);
     setAssistantMessages([
       {
@@ -330,21 +407,16 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       transcriptSaveTimer.current = null;
     }
     if (meeting?.id && meeting?.userId) {
-      const secs = Math.floor((Date.now() - sessionStartTime) / 1000);
-      const mm = Math.floor(secs / 60);
-      const ss = secs % 60;
-      updateStoredMeeting(
-        meeting.id,
-        meeting.userId,
-        {
-          transcript: liveTranscript,
-          status: 'completed',
-          duration: `${mm}m ${ss}s`,
-        },
-        // F2: same snapshot — if the record is still in flight, create it with
-        // the completed status so the meeting can never stay 'live'.
-        meeting
-      ).catch((err) => console.warn('Final transcript persist warning:', err));
+      // Write the COMPLETE conversation of this meeting: the lines already
+      // stored on the record plus everything captured in this session. A resume
+      // that captured nothing therefore still completes the meeting WITH its
+      // existing conversation instead of blanking it, and the stored metadata
+      // (title/topic/resources/notes) is preserved by the update.
+      const sessionSeconds = Math.max(
+        0,
+        Math.floor((Date.now() - sessionStartTimeRef.current) / 1000)
+      );
+      void flushTranscriptNow('completed', addStoredDuration(meeting.duration, sessionSeconds));
     }
 
     if (briefTimer.current) { window.clearTimeout(briefTimer.current); briefTimer.current = null; }
@@ -352,6 +424,8 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setIsFloatingActive(false);
     setIsPlatformClosed(false);
     activeMeetingRef.current = null;
+    sessionBaseTranscriptRef.current = [];
+    sessionTranscriptRef.current = [];
     setActiveMeeting(null);
     setLiveTranscript([]);
   };
@@ -406,6 +480,43 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  // The conversation of the meeting that is active RIGHT NOW: the lines its
+  // record already held plus the lines captured in this session, merged and
+  // deduplicated by transcript-entry id. It is derived from
+  // `sessionBaseTranscriptRef` (reset for every session) plus the live state,
+  // so a resumed meeting displays its full conversation and no other meeting
+  // can contribute a line.
+  const currentMeetingTranscript = mergeTranscriptEntriesById(
+    sessionBaseTranscriptRef.current,
+    liveTranscript
+  );
+
+  // Persist the pending transcript when the page is hidden, closed, reloaded or
+  // navigated away from, instead of losing the last (up to) 1.2 s of speech.
+  // The local-store write inside updateStoredMeeting happens synchronously
+  // before its first await, so the per-user local record is written even while
+  // the tab is being torn down; the Firestore write is best-effort at that
+  // point (it cannot survive an abrupt unload).
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+    const flushOnLeave = () => {
+      if (!activeMeetingRef.current) return;
+      if (transcriptSaveTimer.current) {
+        window.clearTimeout(transcriptSaveTimer.current);
+        transcriptSaveTimer.current = null;
+      }
+      void flushTranscriptNow('live');
+    };
+    window.addEventListener('pagehide', flushOnLeave);
+    window.addEventListener('beforeunload', flushOnLeave);
+    return () => {
+      window.removeEventListener('pagehide', flushOnLeave);
+      window.removeEventListener('beforeunload', flushOnLeave);
+    };
+    // Registered once: everything this handler needs lives in refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <MeetingContext.Provider
       value={{
@@ -440,6 +551,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setIsPlanModalOpen,
         upgradeToPro,
         liveTranscript,
+        currentMeetingTranscript,
         addTranscriptEntry,
         clearTranscript,
         liveBrief,

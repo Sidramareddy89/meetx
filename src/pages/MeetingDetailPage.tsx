@@ -26,7 +26,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useMeeting } from '../contexts/MeetingContext';
 import { Meeting, getLanguageDisplayName } from '../types/meeting';
 import { getMeetingById } from '../services/meetingService';
-import { buildSummaryFromTranscript, buildShareableMinutes, buildLiveBrief } from '../services/meetingInsightService';
+import { buildSummaryFromTranscript, buildShareableMinutes, buildLiveBrief, buildMeetingTranscriptContext } from '../services/meetingInsightService';
 
 const formatDateTime = (ts?: number): string => {
   if (!ts) return '';
@@ -50,7 +50,7 @@ export const MeetingDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const { startMeetingSession, askAssistant, activeMeeting, assistantMessages, isThinking } =
+  const { startMeetingSession, askAssistant, activeMeeting, assistantMessages, isThinking, liveTranscript } =
     useMeeting();
 
   const [meeting, setMeeting] = useState<Meeting | null>(null);
@@ -96,10 +96,19 @@ export const MeetingDetailPage: React.FC = () => {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const sessionIsActiveForThisMeeting = activeMeeting?.id === meeting?.id;
   // Phase 8: all insights are derived from the ACTUAL stored transcript.
   // Nothing is invented — if there is no recorded conversation, each section
-  // honestly reports that.
-  const transcript = meeting?.transcript || [];
+  // honestly reports that. While a live session is running for THIS meeting the
+  // lines captured since it started are shown together with the persisted ones
+  // (the debounced write may not have landed yet); both sides are this
+  // meeting's own data, so nothing from another meeting can appear.
+  const transcript = meeting
+    ? buildMeetingTranscriptContext(
+        meeting.transcript,
+        sessionIsActiveForThisMeeting ? liveTranscript : []
+      )
+    : [];
   const summary = meeting ? buildSummaryFromTranscript(meeting, transcript) : null;
   const shareableText = meeting ? buildShareableMinutes(meeting, transcript) : '';
 
@@ -118,8 +127,6 @@ export const MeetingDetailPage: React.FC = () => {
       return map;
     }, new Map<string, { count: number; first: string; last: string }>())
   );
-
-  const sessionIsActiveForThisMeeting = activeMeeting?.id === meeting?.id;
 
   const handleLaunchAssistant = () => {
     if (!meeting || !currentUser?.uid) return;

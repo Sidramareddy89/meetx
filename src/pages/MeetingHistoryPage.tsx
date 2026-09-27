@@ -54,6 +54,10 @@ const meetingSummaryPreview = (m: Meeting): string | null => {
   return buildSummaryFromTranscript(m, transcript)?.overview || null;
 };
 
+/** How many real remarks this meeting actually stored (its own transcript only). */
+const transcriptLineCount = (m: Meeting): number =>
+  (m.transcript || []).filter((t) => (t.text || '').trim()).length;
+
 export const MeetingHistoryPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
@@ -288,6 +292,16 @@ export const MeetingHistoryPage: React.FC = () => {
                         Live
                       </span>
                     )}
+                    {item.status === 'completed' && (
+                      <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                        Completed
+                      </span>
+                    )}
+                    {item.status === 'scheduled' && (
+                      <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100">
+                        Scheduled
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-slate-500 mt-1 flex items-center gap-3">
                     {item.selectedLanguage && (
@@ -296,6 +310,21 @@ export const MeetingHistoryPage: React.FC = () => {
                         {getLanguageDisplayName(item.selectedLanguage)}
                       </span>
                     )}
+                    {/* Real recorded duration of the meeting, when one was saved. */}
+                    {item.duration && (
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400" />
+                        {item.duration}
+                      </span>
+                    )}
+                    {/* Whether this meeting actually has a conversation, counted
+                        from the stored transcript (never a placeholder). */}
+                    <span className="inline-flex items-center gap-1">
+                      <FileText className="w-3 h-3 text-slate-400" />
+                      {transcriptLineCount(item) > 0
+                        ? `${transcriptLineCount(item)} line${transcriptLineCount(item) === 1 ? '' : 's'}`
+                        : 'No conversation yet'}
+                    </span>
                     {(item.resources?.length || 0) > 0 && (
                       <span className="inline-flex items-center gap-1">
                         <Paperclip className="w-3 h-3 text-slate-400" />
