@@ -2,6 +2,9 @@
 // Keys from VITE_GEMINI_API_KEY / VITE_GROQ_API_KEY (or localStorage
 // overrides meetx_gemini_api_key / meetx_groq_api_key). Model lists from
 // VITE_GEMINI_MODELS / VITE_GROQ_MODELS with working defaults.
+// REALTIME LLM FIX: every provider/model attempt records a redacted diagnostic
+// (provider, model, outcome, latency, error category) retrievable with
+// getLlmDiagnostics(). Keys/headers are never logged.
 import { AssistantContext } from './aiAssistantService';
 
 export const geminiKey = (): string =>
@@ -78,12 +81,75 @@ export const buildPrompt = (prompt: string, context: AssistantContext): string =
 // replies fast instead of waiting on failing Gemini calls.
 let geminiCooldownUntil = 0;
 
+export type LlmErrorCategory =
+  | 'no-key'
+  | 'cooldown'
+  | 'timeout'
+  | 'rate-limit'
+  | 'server-error'
+  | 'client-error'
+  | 'empty-response'
+  | 'network-error';
+
+export interface LlmAttemptDiagnostic {
+  provider: 'gemini' | 'groq';
+  model: string;
+  ok: boolean;
+  latencyMs: number;
+  httpStatus?: number;
+  errorCategory?: LlmErrorCategory;
+  /** Same shape for native + chat endpoints: what the request was for. */
+  endpoint: 'gemini:generateContent' | 'groq:chat-completions';
+}
+
+const LLM_DIAGNOSTICS_CAP = 50;
+const llmDiagnostics: LlmAttemptDiagnostic[] = [];
+
+/** REALTIME LLM FIX: most-recent-first read of redacted provider diagnostics. */
+export const getLlmDiagnostics = (): LlmAttemptDiagnostic[] => [...llmDiagnostics].reverse();
+
+/** REALTIME LLM FIX: tests/dev harness reset — never used by the widget. */
+export const clearLlmDiagnostics = (): void => {
+  llmDiagnostics.length = 0;
+};
+
+const recordAttempt = (attempt: LlmAttemptDiagnostic): void => {
+  llmDiagnostics.push(attempt);
+  if (llmDiagnostics.length > LLM_DIAGNOSTICS_CAP) llmDiagnostics.shift();
+  // Development-safe single-line log: attempt outcome only, never keys/headers.
+  if ((import.meta as unknown as { env?: Record<string, string> }).env?.DEV) {
+    const detail =
+      attempt.ok
+        ? 'ok'
+        : `${attempt.errorCategory || 'network-error'}${attempt.httpStatus !== undefined ? ` http=${attempt.httpStatus}` : ''}`;
+    console.debug(
+      `[llm] ${attempt.provider}/${attempt.model} ${detail} ${attempt.latencyMs}ms`
+    );
+  }
+};
+
+const classifyGeminiError = (status: number): LlmErrorCategory =>
+  status === 429 ? 'rate-limit' : status >= 500 ? 'server-error' : 'client-error';
+
 export async function callGemini(prompt: string, context: AssistantContext): Promise<string | null> {
   const apiKey = geminiKey();
-  if (!apiKey) return null;
-  if (Date.now() < geminiCooldownUntil) return null;
+  if (!apiKey) {
+    return null;
+  }
+  if (Date.now() < geminiCooldownUntil) {
+    recordAttempt({
+      provider: 'gemini',
+      model: geminiModels()[0] || GEMINI_DEFAULTS[0],
+      ok: false,
+      latencyMs: 0,
+      errorCategory: 'cooldown',
+      endpoint: 'gemini:generateContent',
+    });
+    return null;
+  }
   const fullPrompt = buildPrompt(prompt, context);
   for (const model of geminiModels()) {
+    const startedAt = Date.now();
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4000);
@@ -100,19 +166,62 @@ export async function callGemini(prompt: string, context: AssistantContext): Pro
         }
       );
       clearTimeout(timer);
+      const latencyMs = Date.now() - startedAt;
       // Fast-fail: rate-limit / server error / timeout -> activate
       // cooldown and let the caller fall back to Groq immediately.
       if (res.status === 429 || res.status >= 500) {
         geminiCooldownUntil = Date.now() + 60000;
+        recordAttempt({
+          provider: 'gemini',
+          model,
+          ok: false,
+          latencyMs,
+          httpStatus: res.status,
+          errorCategory: classifyGeminiError(res.status),
+          endpoint: 'gemini:generateContent',
+        });
         return null;
       }
-      if (!res.ok) continue;
+      if (!res.ok) {
+        recordAttempt({
+          provider: 'gemini',
+          model,
+          ok: false,
+          latencyMs,
+          httpStatus: res.status,
+          errorCategory: classifyGeminiError(res.status),
+          endpoint: 'gemini:generateContent',
+        });
+        continue;
+      }
       const data = await res.json();
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (text && String(text).trim()) return String(text).trim();
-    } catch {
+      if (text && String(text).trim()) {
+        recordAttempt({ provider: 'gemini', model, ok: true, latencyMs, httpStatus: res.status, endpoint: 'gemini:generateContent' });
+        return String(text).trim();
+      }
+      recordAttempt({
+        provider: 'gemini',
+        model,
+        ok: false,
+        latencyMs,
+        httpStatus: res.status,
+        errorCategory: 'empty-response',
+        endpoint: 'gemini:generateContent',
+      });
+    } catch (err) {
+      const latencyMs = Date.now() - startedAt;
+      const timedOut = err instanceof Error && err.name === 'AbortError';
       // Abort/timeout -> same fast-fail: cooldown, use Groq now.
       geminiCooldownUntil = Date.now() + 30000;
+      recordAttempt({
+        provider: 'gemini',
+        model,
+        ok: false,
+        latencyMs,
+        errorCategory: timedOut ? 'timeout' : 'network-error',
+        endpoint: 'gemini:generateContent',
+      });
       return null;
     }
   }
@@ -121,9 +230,12 @@ export async function callGemini(prompt: string, context: AssistantContext): Pro
 
 export async function callGroq(prompt: string, context: AssistantContext): Promise<string | null> {
   const apiKey = groqKey();
-  if (!apiKey) return null;
+  if (!apiKey) {
+    return null;
+  }
   const fullPrompt = buildPrompt(prompt, context);
   for (const model of groqModels()) {
+    const startedAt = Date.now();
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4000);
@@ -134,7 +246,11 @@ export async function callGroq(prompt: string, context: AssistantContext): Promi
         body: JSON.stringify({
           model,
           messages: [
-    'You are MEETX, an elite real-time multilingual AI meeting copilot. REPLY FAST AND CONCISE: max 40 words or 3 short bullets, no preamble, no filler, professional speak-ready tone. If asked what to say, start with Say: ... Answer strictly from the transcript.',
+            {
+              role: 'system',
+              content:
+                'You are MEETX, an elite real-time multilingual AI meeting copilot. REPLY FAST AND CONCISE: max 40 words or 3 short bullets, no preamble, no filler, professional speak-ready tone. If asked what to say, start with Say: ... Answer strictly from the transcript.',
+            },
             { role: 'user', content: fullPrompt },
           ],
           max_tokens: 1024,
@@ -143,17 +259,59 @@ export async function callGroq(prompt: string, context: AssistantContext): Promi
         }),
       });
       clearTimeout(timer);
-      // Fast-fail: rate-limit / server error / timeout -> activate
-      // cooldown and let the caller fall back to Groq immediately.
+      const latencyMs = Date.now() - startedAt;
+      // Fast-fail: rate-limit / server error -> caller moves to the next
+      // fallback at once.
       if (res.status === 429 || res.status >= 500) {
-      // Groq fast-fail -> answer from the offline engine at once.
+        recordAttempt({
+          provider: 'groq',
+          model,
+          ok: false,
+          latencyMs,
+          httpStatus: res.status,
+          errorCategory: res.status === 429 ? 'rate-limit' : 'server-error',
+          endpoint: 'groq:chat-completions',
+        });
         return null;
       }
-      if (!res.ok) continue;
+      if (!res.ok) {
+        recordAttempt({
+          provider: 'groq',
+          model,
+          ok: false,
+          latencyMs,
+          httpStatus: res.status,
+          errorCategory: 'client-error',
+          endpoint: 'groq:chat-completions',
+        });
+        continue;
+      }
       const data = await res.json();
       const text = data?.choices?.[0]?.message?.content;
-      if (text && String(text).trim()) return String(text).trim();
-    } catch {
+      if (text && String(text).trim()) {
+        recordAttempt({ provider: 'groq', model, ok: true, latencyMs, httpStatus: res.status, endpoint: 'groq:chat-completions' });
+        return String(text).trim();
+      }
+      recordAttempt({
+        provider: 'groq',
+        model,
+        ok: false,
+        latencyMs,
+        httpStatus: res.status,
+        errorCategory: 'empty-response',
+        endpoint: 'groq:chat-completions',
+      });
+    } catch (err) {
+      const latencyMs = Date.now() - startedAt;
+      const timedOut = err instanceof Error && err.name === 'AbortError';
+      recordAttempt({
+        provider: 'groq',
+        model,
+        ok: false,
+        latencyMs,
+        errorCategory: timedOut ? 'timeout' : 'network-error',
+        endpoint: 'groq:chat-completions',
+      });
       continue;
     }
   }

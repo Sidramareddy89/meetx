@@ -1,5 +1,5 @@
 import { MeetingTranscriptEntry, MeetingResource } from '../types/meeting';
-import { callGemini, callGroq } from './llmProviders';
+import { callGemini, callGroq, geminiKey, groqKey } from './llmProviders';
 
 export interface AssistantContext {
   topic: string;
@@ -12,10 +12,28 @@ export interface AssistantContext {
 export interface AssistantResponse {
   text: string;
   followupSuggestions?: string[];
+  /**
+   * REALTIME LLM FIX: which engine actually produced this answer. `llm` means
+   * the returned text is model-generated (Gemini/Groq); `provider-unavailable`
+   * means both providers failed and the text is a truthful error, never a
+   * stand-in answer; `offline` means no provider key is configured and the
+   * deterministic transcript template answered instead.
+   */
+  source: 'llm' | 'provider-unavailable' | 'offline';
 }
+
+/** Displayed when provider keys exist but every provider/model call failed. */
+export const PROVIDER_UNAVAILABLE_MESSAGE =
+  'AI provider unavailable. Please try again.';
 
 /** High-Intelligence Real-Time QA engine (kept for reference).
  */
+
+/** Text the offline builder produces — the orchestrator decides its `source`. */
+interface OfflineAnswer {
+  text: string;
+  followupSuggestions?: string[];
+}
 
 /** Offline conversation engine: answers the 4 widget actions purely from the
  *  REAL transcript + uploaded resources. Never fabricates — when there is no
@@ -24,7 +42,7 @@ function buildOfflineConversationAnswer(
   queryOrAction: string,
   actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query',
   context: AssistantContext
-): AssistantResponse {
+): OfflineAnswer {
   const entries = (context.transcript || []).filter((t) => (t.text || '').trim());
   const lastLines = entries.slice(-8).map((t) => {
     const speaker = t.speakerName || t.speakerId || 'Speaker';
@@ -119,34 +137,37 @@ export const generateAssistantResponse = async (
   actionType: 'assist' | 'say' | 'followup' | 'recap' | 'query',
   context: AssistantContext
 ): Promise<AssistantResponse> => {
+  const suggestions = [
+    'What should I say next?',
+    'Give me 2 follow-up questions',
+    'Summarize recent points',
+  ];
   // 1. Gemini first (primary) — tries gemini-3.7-flash, 3.6-flash,
   //    flash-latest one by one (gemini-1.5-flash is retired → 404).
   const geminiAnswer = await callGemini(queryOrAction, context);
   if (geminiAnswer) {
-    return {
-      text: geminiAnswer,
-      followupSuggestions: [
-        'What should I say next?',
-        'Give me 2 follow-up questions',
-        'Summarize recent points',
-      ],
-    };
+    return { text: geminiAnswer, followupSuggestions: suggestions, source: 'llm' };
   }
 
   // 2. Groq fallback when Gemini is unavailable / rate-limited / 4xx.
   const groqAnswer = await callGroq(queryOrAction, context);
   if (groqAnswer) {
+    return { text: groqAnswer, followupSuggestions: suggestions, source: 'llm' };
+  }
+
+  // 3. Offline engine — ONLY the legitimate no-key mode. It is grounded in the
+  //    REAL transcript + uploaded resources and explicitly tells the user that
+  //    no provider is configured, so it can never pass as an LLM answer.
+  if (!geminiKey() && !groqKey()) {
+    const offline = buildOfflineConversationAnswer(queryOrAction, actionType, context);
     return {
-      text: groqAnswer,
-      followupSuggestions: [
-        'What should I say next?',
-        'Give me 2 follow-up questions',
-        'Summarize recent points',
-      ],
+      ...offline,
+      text: offline.text + '\n\nProvider: none configured — configure a Gemini/Groq key for live answers.',
+      source: 'offline',
     };
   }
 
-  // 3. Offline engine — grounded in the REAL transcript + uploaded
-  //    resources. Never blank, labels itself as transcript-based.
-  return buildOfflineConversationAnswer(queryOrAction, actionType, context);
+  // 4. Keys exist but every provider/model call failed — NEVER present a
+  //    template as an LLM answer. Surface a truthful, retryable error instead.
+  return { text: PROVIDER_UNAVAILABLE_MESSAGE, followupSuggestions: suggestions, source: 'provider-unavailable' };
 };
