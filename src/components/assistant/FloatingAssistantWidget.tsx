@@ -284,7 +284,7 @@ export const FloatingAssistantWidget: React.FC = () => {
   }, [liveTranscript.length]);
 
 
-  // --- Desktop always-on-top window (Document Picture-in-Picture) ----------
+  // --- Desktop window adapter: native Tauri or browser Document PiP ----------
   // The React app (meeting, transcript, AI, persistence) always runs in THIS
   // opener document; the desktop window only hosts the widget's DOM through a
   // portal. Opening, closing or hiding that window therefore never starts or
@@ -296,8 +296,7 @@ export const FloatingAssistantWidget: React.FC = () => {
     openWindow: openDesktopWindow,
     closeWindow: closeDesktopWindow,
   } = useDesktopAssistantWindow();
-  // Event/viewport host: the PiP window while it is open (its events fire in
-  // its own document), otherwise the app window.
+  // Event/viewport host: the assistant webview/PiP document, or this page.
   const hostEventTarget: Window = desktopWindow ?? window;
   const hostDocument: Document = desktopWindow?.document ?? document;
 
@@ -1002,7 +1001,8 @@ export const FloatingAssistantWidget: React.FC = () => {
     </div>
   );
 
-  // Desktop mode: portal the SAME widget tree into the always-on-top window.
+  // Browser PiP portals the same widget tree; Tauri already renders this
+  // component in its dedicated native assistant webview.
   // Meeting state is unaffected by this switch — it lives in MeetingContext
   // above; closing the window simply falls back to the in-page render until
   // the user restores the desktop window (same session, same state).

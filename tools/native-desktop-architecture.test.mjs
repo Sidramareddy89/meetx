@@ -18,9 +18,11 @@ const context = read('../src/contexts/MeetingContext.tsx');
 const rust = read('../src-tauri/src/lib.rs');
 const config = JSON.parse(read('../src-tauri/tauri.conf.json'));
 const capabilities = JSON.parse(read('../src-tauri/capabilities/default.json'));
+const viteConfig = read('../vite.config.ts');
 
 const checks = [
   ['Tauri dev and build scripts exist', Boolean(pkg.scripts['tauri:dev'] && pkg.scripts['tauri:build'])],
+  ['Vite watcher excludes locked Tauri build output on Windows', viteConfig.includes("'**/src-tauri/target/**'")],
   ['desktop shell has one configured main native window', config.app.windows.length === 1 && config.app.windows[0].title === 'MEETX'],
   ['native assistant is a separate Tauri top-level WebviewWindow', nativeWindow.includes("new WebviewWindow('assistant'")],
   ['native assistant is always-on-top and resizable', nativeWindow.includes('alwaysOnTop: true') && nativeWindow.includes('resizable: true')],
@@ -39,6 +41,7 @@ const checks = [
   ['Windows request is checked through GetWindowDisplayAffinity and the documented WDA_EXCLUDEFROMCAPTURE constant', rust.includes('GetWindowDisplayAffinity') && rust.includes('WDA_EXCLUDEFROMCAPTURE')],
   ['macOS is reported as Not Available without universal capture guarantees', rust.includes('#[cfg(target_os = "macos")]') && rust.includes('ProtectionStatus::NotAvailable') && rust.includes('reliable macOS capture-exclusion guarantee')],
   ['web mode retains Document Picture-in-Picture', browserWindow.includes('controller.requestWindow') && browserWindow.includes('!isTauri()')],
+  ['desktop window hook dispatches to native Tauri assistant mode', browserWindow.includes("mode: 'native' | 'document-pip' | 'inline'") && browserWindow.includes('isNativeAssistant') && browserWindow.includes('openOrRestoreNativeAssistant')],
   ['web mode stays outside Tauri branch in app routing', app.includes('return (\n    <BrowserRouter>') && browserWindow.includes('documentPictureInPicture')],
   ['desktop session owner remains usable while assistant hidden', layout.includes('Show assistant') && layout.includes('End meeting')],
   ['content protection status distinguishes Protected, Unsupported, Not Available and Unknown', bridge.includes("'protected' | 'unsupported' | 'not-available' | 'unknown'")],
