@@ -139,14 +139,14 @@ export const TopNavBar: React.FC = () => {
 
       {/* Right Controls: Detectable toggle, Language, Profile */}
       <div className="flex items-center gap-3">
-        {/* Detectable / Undetectable switch */}
+        {/* Detectable / Private switch */}
         <button
           onClick={() => setIsDetectable(!isDetectable)}
           className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${isDetectable
               ? 'bg-slate-100 hover:bg-slate-200/80 text-slate-700 border-slate-200'
               : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
             }`}
-          title={isDetectable ? 'Detectable mode is ON (Visible to screen share)' : 'Undetectable mode active (Invisible to screen share)'}
+          title={isDetectable ? 'Detectable mode is ON' : 'Private Mode: tab/window sharing can exclude the separate assistant; Entire Screen may include it'}
         >
           {isDetectable ? (
             <>
@@ -159,7 +159,7 @@ export const TopNavBar: React.FC = () => {
           ) : (
             <>
               <EyeOff className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Undetectable</span>
+              <span>Private</span>
               <div className="w-7 h-4 bg-emerald-500 rounded-full relative p-0.5 transition-colors">
                 <div className="w-3 h-3 bg-white rounded-full shadow-sm ml-auto"></div>
               </div>

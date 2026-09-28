@@ -197,12 +197,12 @@ export const HomePage: React.FC = () => {
                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                     : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
                 }`}
-                title="Toggle Detectable vs Undetectable Mode"
+                title="Toggle Detectable vs Private Mode"
               >
                 {!isDetectable ? (
                   <>
                     <EyeOff className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Mode: Undetectable (Private)</span>
+                    <span>Mode: Private</span>
                   </>
                 ) : (
                   <>
@@ -231,16 +231,16 @@ export const HomePage: React.FC = () => {
         </div>
       </div>
 
-      {/* Undetectable Mode Guidance & Limitation Box */}
+      {/* Private Mode Guidance & Limitation Box */}
       {!isDetectable && (
         <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200/90 text-xs text-emerald-950 space-y-2 animate-in fade-in duration-200 shadow-sm">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 font-semibold text-emerald-900">
               <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-              <span>Undetectable Mode Active — Screen Sharing Guidance</span>
+              <span>Private Mode — Screen Sharing Guidance</span>
             </div>
             <span className="text-[10px] font-medium bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
-              Private Sharing Supported
+              Capture limits explained
             </span>
           </div>
           <p className="text-slate-600 text-[11.5px] leading-relaxed">
@@ -250,18 +250,18 @@ export const HomePage: React.FC = () => {
             <div className="p-2.5 rounded-xl bg-white border border-emerald-200 flex items-start gap-2 shadow-xs">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold text-slate-900">Supported Sharing (Invisible to Participants):</span>
+                <span className="font-semibold text-slate-900">Browser Tab / Application Window:</span>
                 <p className="text-slate-600 mt-0.5">
-                  When starting screen share in Zoom, Meet, or Teams, choose <strong>Browser Tab</strong> or <strong>Application Window</strong> (e.g. VS Code, Word, slides). The assistant window remains outside that capture boundary.
+                  Choose a specific <strong>Browser Tab</strong> or <strong>Application Window</strong> in Zoom, Meet, or Teams. The separate MEETX assistant window is outside that selected capture boundary.
                 </p>
               </div>
             </div>
             <div className="p-2.5 rounded-xl bg-amber-50/80 border border-amber-200/80 flex items-start gap-2 shadow-xs">
               <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold text-amber-900">Entire Screen Limitation (Visible to Participants):</span>
+                <span className="font-semibold text-amber-900">Entire Screen:</span>
                 <p className="text-amber-800 mt-0.5">
-                  Selecting <strong>Entire Screen</strong> captures your whole desktop including the floating assistant. Never select Entire Screen if you want the assistant to remain private.
+                  <strong>Private Mode cannot hide the assistant during Entire Screen sharing. Please share the meeting tab or application window.</strong> MEETX cannot inspect a share started in a separate meeting app, so it cannot detect this automatically.
                 </p>
               </div>
             </div>

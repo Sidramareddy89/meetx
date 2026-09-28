@@ -58,10 +58,9 @@ interface MeetingContextType {
   setHideMeetxHidesWidget: (val: boolean) => void;
   isPlatformClosed: boolean;
   setIsPlatformClosed: (val: boolean) => void;
-  screenShareSurface: 'monitor' | 'window' | 'browser' | null;
-  setScreenShareSurface: (val: 'monitor' | 'window' | 'browser' | null) => void;
-  startScreenShareVerification: () => Promise<'monitor' | 'window' | 'browser' | null>;
-  stopScreenShareVerification: () => void;
+  /** The meeting app does not expose its active share target to this page. */
+  isEntireScreenShareReported: boolean;
+  setIsEntireScreenShareReported: (val: boolean) => void;
 
   // Free Meetings Limit & Plan Modal
   freeMeetingsLeft: number;
@@ -127,44 +126,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [answerCardSize, setAnswerCardSize] = useState<AnswerCardSize>('normal');
   const [hideMeetxHidesWidget, setHideMeetxHidesWidget] = useState<boolean>(false);
   const [isPlatformClosed, setIsPlatformClosed] = useState<boolean>(false);
-  const [screenShareSurface, setScreenShareSurface] = useState<'monitor' | 'window' | 'browser' | null>(null);
-  const screenShareStreamRef = useRef<MediaStream | null>(null);
-
-  const stopScreenShareVerification = useCallback(() => {
-    if (screenShareStreamRef.current) {
-      screenShareStreamRef.current.getTracks().forEach((track) => {
-        try { track.stop(); } catch { /* noop */ }
-      });
-      screenShareStreamRef.current = null;
-    }
-    setScreenShareSurface(null);
-  }, []);
-
-  const startScreenShareVerification = useCallback(async (): Promise<'monitor' | 'window' | 'browser' | null> => {
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
-      return null;
-    }
-    try {
-      stopScreenShareVerification();
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false,
-      });
-      screenShareStreamRef.current = stream;
-      const track = stream.getVideoTracks()[0];
-      if (!track) return null;
-      const settings = track.getSettings ? track.getSettings() : ({} as MediaTrackSettings);
-      const surface = (settings.displaySurface as 'monitor' | 'window' | 'browser') || 'monitor';
-      setScreenShareSurface(surface);
-      track.onended = () => {
-        setScreenShareSurface(null);
-        screenShareStreamRef.current = null;
-      };
-      return surface;
-    } catch {
-      return null;
-    }
-  }, [stopScreenShareVerification]);
+  const [isEntireScreenShareReported, setIsEntireScreenShareReported] = useState(false);
 
   // Free meetings quota & plan modal. The stored counter is tied to the
   // allowance it was created under: when MAX_FREE_MEETINGS differs from the
@@ -521,7 +483,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     if (briefTimer.current) { window.clearTimeout(briefTimer.current); briefTimer.current = null; }
-    stopScreenShareVerification();
+    setIsEntireScreenShareReported(false);
     setLiveBrief(null);
     setIsFloatingActive(false);
     setIsPlatformClosed(false);
@@ -732,10 +694,8 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setHideMeetxHidesWidget,
         isPlatformClosed,
         setIsPlatformClosed,
-        screenShareSurface,
-        setScreenShareSurface,
-        startScreenShareVerification,
-        stopScreenShareVerification,
+        isEntireScreenShareReported,
+        setIsEntireScreenShareReported,
         freeMeetingsLeft,
         isProUser,
         isPlanModalOpen,

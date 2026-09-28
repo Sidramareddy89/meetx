@@ -291,6 +291,28 @@ const main = async () => {
   check('TEST 1: the active session is shown', text().includes('MEETX is now active'), text().slice(0, 120));
   check('TEST 1: a desktop-window close toggle exists in the window', desktopToggle()?.props?.title?.includes('Close desktop floating window') === true);
 
+  // ------------------------------------------ privacy/capture-boundary flow
+  check('PRIVACY: private mode never claims the widget is undetectable', !text().includes('Undetectable'));
+  const reportEntireScreen = findNode(widgetTree, (n) => n.type === 'button' && n.props?.children === 'I’m sharing Entire Screen');
+  check('PRIVACY: Private ON offers an explicit Entire Screen report', Boolean(reportEntireScreen));
+  check('PRIVACY: no extra getDisplayMedia picker is started', typeof globalThis.navigator === 'undefined' || !globalThis.navigator.mediaDevices?.getDisplayMedia);
+  reportEntireScreen?.props?.onClick();
+  renderAll();
+  check('PRIVACY: Private ON + Entire Screen shows the required warning', text().includes('Private Mode cannot hide the assistant during Entire Screen sharing. Please share the meeting tab or application window.'));
+  check('PRIVACY: warning is persistent while meeting/transcription remain active', meetingValue.isFloatingActive && meetingValue.activeMeeting?.id === 'meet-pip-lifecycle' && text().includes('Your meeting, transcription, AI assistance, and saving continue.'));
+  const stopReport = findNode(widgetTree, (n) => n.type === 'button' && n.props?.children === 'I stopped sharing Entire Screen');
+  stopReport?.props?.onClick();
+  renderAll();
+  check('PRIVACY: stopping Entire Screen report removes warning without ending meeting', !text().includes('Private Mode cannot hide') && meetingValue.isFloatingActive);
+  meetingValue.setIsDetectable(true);
+  renderAll();
+  check('PRIVACY: Private OFF + Entire Screen has no private-mode warning', !text().includes('Private Mode cannot hide'));
+  meetingValue.setIsDetectable(false);
+  renderAll();
+  const tabWindowGuidance = findNode(widgetTree, (n) => n.type === 'span' && n.props?.children === 'Private Mode');
+  check('PRIVACY: Private ON + Browser Tab/Application Window guidance is shown', Boolean(tabWindowGuidance) && text().includes('Share a Browser Tab or Application Window'));
+  check('PRIVACY: share report has one context setter and no duplicate state/listeners', typeof meetingValue.setIsEntireScreenShareReported === 'function' && !('startScreenShareVerification' in meetingValue));
+
   // ---------------------------------------------- TEST 6 (user closes window)
   // Simulate the browser-provided close control: it only fires `pagehide`.
   resetPortalCapture();
@@ -304,6 +326,7 @@ const main = async () => {
   check('TEST 6: the widget fell back to the in-page render', portalContainer() === null);
   check('TEST 6: no automatic reopen happened', pip.requests.length === 1, `requests=${pip.requests.length}`);
   check('TEST 6: a restore toggle is available in-page', desktopToggle()?.props?.title?.includes('Open desktop floating window') === true);
+  check('PRIVACY: closing floating assistant preserves active Entire Screen warning state', meetingValue.isEntireScreenShareReported === false && meetingValue.isFloatingActive);
 
   // ------------------------------------- TEST 7 (conversation continues hidden)
   meetingValue.addTranscriptEntry(entry('pip-r1', 'The assistant keeps listening while hidden.'));
@@ -330,6 +353,7 @@ const main = async () => {
   check('TEST 8: the restore targeted a fresh window', secondWindow !== firstWindow && pipController.window === secondWindow);
   check('TEST 8: the SAME session is rendered into it', portalContainer() === secondWindow.document.body.children[0] && meetingValue.activeMeeting?.id === 'meet-pip-lifecycle');
   check('TEST 8: the transcript captured while hidden is displayed', text().includes('keeps listening while hidden'));
+  check('PRIVACY: restoring floating assistant keeps meeting running', meetingValue.isFloatingActive && meetingValue.activeMeeting?.id === 'meet-pip-lifecycle');
 
   // --------------------------------------------- TEST 9 (stop → window cleanup)
   meetingValue.stopMeetingSession();

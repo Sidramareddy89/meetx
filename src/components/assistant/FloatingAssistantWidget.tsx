@@ -179,10 +179,8 @@ export const FloatingAssistantWidget: React.FC = () => {
     hideMeetxHidesWidget,
     setHideMeetxHidesWidget,
     setIsPlatformClosed,
-    screenShareSurface,
-    setScreenShareSurface,
-    startScreenShareVerification,
-    stopScreenShareVerification,
+    isEntireScreenShareReported,
+    setIsEntireScreenShareReported,
     setIsPlanModalOpen,
     freeMeetingsLeft,
     isProUser,
@@ -192,6 +190,13 @@ export const FloatingAssistantWidget: React.FC = () => {
     addTranscriptEntry,
     isThinking,
   } = useMeeting();
+  const entireScreenWarning = !isDetectable && isEntireScreenShareReported;
+
+  useEffect(() => {
+    if (isDetectable && isEntireScreenShareReported) {
+      setIsEntireScreenShareReported(false);
+    }
+  }, [isDetectable, isEntireScreenShareReported, setIsEntireScreenShareReported]);
 
   const [inputQuery, setInputQuery] = useState('');
   const [activeAssistantMode, setActiveAssistantMode] = useState<AssistantMode>('assist');
@@ -572,14 +577,14 @@ export const FloatingAssistantWidget: React.FC = () => {
           </button>
         )}
 
-        {/* Undetectable mode indicator pill */}
+        {/* Private mode indicator pill */}
         {!isDetectable && (
           <span
-            title="Undetectable Mode Active: Share a specific Browser Tab or Window in your meeting to keep this assistant private. (Entire Screen captures everything)."
+            title="Private Mode: the separate assistant window stays outside a Browser Tab or Application Window capture. Entire Screen sharing can include it."
             className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] text-emerald-400 font-medium cursor-help"
           >
             <EyeOff className="w-3 h-3 text-emerald-400" />
-            <span className="hidden sm:inline">Undetectable</span>
+            <span className="hidden sm:inline">Private Mode</span>
           </span>
         )}
 
@@ -592,6 +597,29 @@ export const FloatingAssistantWidget: React.FC = () => {
           <Square className="w-2.5 h-2.5 fill-current" />
         </button>
       </div>
+
+      {!isDetectable && (
+        <div className={`mt-2 rounded-xl border px-3 py-2 text-[11px] leading-relaxed ${entireScreenWarning
+          ? 'border-amber-400/50 bg-amber-950/90 text-amber-100 shadow-lg'
+          : 'border-slate-700/70 bg-slate-900/95 text-slate-300'
+          }`} role={entireScreenWarning ? 'alert' : 'status'}>
+          {entireScreenWarning ? (
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+              <div className="flex-1">
+                <p className="font-semibold">Private Mode cannot hide the assistant during Entire Screen sharing. Please share the meeting tab or application window.</p>
+                <p className="mt-0.5 text-amber-100/80">Your meeting, transcription, AI assistance, and saving continue. Participants may see the assistant in the shared screen.</p>
+                <button type="button" onClick={() => setIsEntireScreenShareReported(false)} className="mt-1 text-amber-200 underline underline-offset-2">I stopped sharing Entire Screen</button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span><strong className="text-slate-100">Private Mode:</strong> Share a Browser Tab or Application Window to keep this separate assistant window outside the capture. Entire Screen may show it. MEETX cannot detect sharing started in another app.</span>
+              <button type="button" onClick={() => setIsEntireScreenShareReported(true)} className="shrink-0 rounded-lg border border-amber-500/40 px-2 py-1 text-amber-200 hover:bg-amber-500/10">I’m sharing Entire Screen</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 2. Main Floating Assistant Card (Strictly matching reference screenshot) */}
       {!isWidgetCollapsed && (

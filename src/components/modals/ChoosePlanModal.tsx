@@ -217,12 +217,12 @@ export const ChoosePlanModal: React.FC = () => {
               </div>
             </div>
 
-            {/* Plan 2: Pro + Undetectability (Dark slate card with Popular badge) */}
+            {/* Plan 2: Pro + Private Mode (Dark slate card with Popular badge) */}
             <div className="bg-[#242938] text-white rounded-2xl p-6 flex flex-col justify-between shadow-xl relative border border-slate-700/60 overflow-hidden">
               <div>
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-slate-300">
-                    Pro + Undetectability
+                    Pro + Private Mode
                   </h3>
                   <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-700/80 px-2 py-0.5 rounded-full text-slate-200 border border-slate-600">
                     Popular
@@ -246,17 +246,17 @@ export const ChoosePlanModal: React.FC = () => {
                       <Check className="w-3 h-3 text-blue-400" />
                     </div>
                     <div>
-                      <div className="font-semibold text-white">MEETX Undetectability</div>
+                      <div className="font-semibold text-white">MEETX Private Mode</div>
                       <div className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-                        MEETX will be invisible to screen share during meetings
+                        Private Mode keeps the separate assistant outside a selected Browser Tab or Application Window capture. Entire Screen sharing may include it.
                       </div>
                     </div>
                   </div>
 
-                  {/* Stealth Screen Share Graphic Illustration */}
+                  {/* Screen Share Capture Guidance */}
                   <div className="mt-4 p-3.5 rounded-xl bg-slate-900/80 border border-blue-500/30 flex items-center justify-center gap-2.5 shadow-inner">
                     <ShieldCheck className="w-5 h-5 text-blue-400" />
-                    <span className="text-[11px] font-medium text-slate-200">Stealth Screen-Share Invisibility</span>
+                    <span className="text-[11px] font-medium text-slate-200">Tab and window capture guidance</span>
                   </div>
                 </div>
               </div>
