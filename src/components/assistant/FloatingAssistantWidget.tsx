@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { createPortal } from 'react-dom';
 import {
   Sparkles,
   MessageSquare,
@@ -13,6 +14,7 @@ import {
   EyeOff,
   Mic,
   ArrowRight,
+  PictureInPicture,
   Maximize2,
   Minimize2,
   CreditCard,
@@ -26,6 +28,7 @@ import {
 } from 'lucide-react';
 import { useMeeting } from '../../contexts/MeetingContext';
 import { useSpeechToText } from '../../hooks/useSpeechToText';
+import { useDesktopAssistantWindow } from '../../hooks/useDesktopAssistantWindow';
 import { SUPPORTED_LANGUAGES } from '../../types/meeting';
 import { LiveConversationPane } from './LiveConversationPane';
 import { LiveBriefPane } from './LiveBriefPane';
@@ -99,12 +102,15 @@ const FALLBACK_WIDGET_HEIGHT = 200;
 
 const clampWidgetPosition = (
   nextPosition: WidgetPosition,
-  widget: HTMLDivElement | null
+  widget: HTMLDivElement | null,
+  // The viewport of whichever window hosts the widget: the app window in-page,
+  // or the desktop floating window while it is open.
+  viewport: Pick<Window, 'innerWidth' | 'innerHeight'> = window
 ): WidgetPosition => {
   const width = widget?.offsetWidth || FALLBACK_WIDGET_WIDTH;
   const height = widget?.offsetHeight || FALLBACK_WIDGET_HEIGHT;
-  const availableWidth = Math.max(0, window.innerWidth - width);
-  const availableHeight = Math.max(0, window.innerHeight - height);
+  const availableWidth = Math.max(0, viewport.innerWidth - width);
+  const availableHeight = Math.max(0, viewport.innerHeight - height);
   const minX = Math.min(VIEWPORT_MARGIN, availableWidth);
   const minY = Math.min(VIEWPORT_MARGIN, availableHeight);
   const maxX = Math.max(minX, availableWidth - VIEWPORT_MARGIN);
@@ -116,7 +122,21 @@ const clampWidgetPosition = (
   };
 };
 
+/** Where the user last dragged the in-page widget (survives reloads). */
+const WIDGET_POSITION_KEY = 'meetx_widget_position';
+
 const getInitialWidgetPosition = (): WidgetPosition => {
+  try {
+    const saved =
+      typeof localStorage !== 'undefined'
+        ? JSON.parse(localStorage.getItem(WIDGET_POSITION_KEY) || 'null')
+        : null;
+    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+      return clampWidgetPosition(saved as WidgetPosition, null);
+    }
+  } catch {
+    // Corrupted value → fall through to the default placement.
+  }
   return clampWidgetPosition(
     {
       x: window.innerWidth / 2 - FALLBACK_WIDGET_WIDTH / 2,
@@ -197,21 +217,32 @@ export const FloatingAssistantWidget: React.FC = () => {
   /** Text of the last remark that already triggered an answer (repeat guard). */
   const lastAutoAnsweredTextRef = useRef<string>('');
   const autoFollowRef = useRef(true);
+  /**
+   * PIPELINE SEPARATION: Set to true while an explicit user question (typed or
+   * voice-detected) is being handled by Pipeline 2. The Pipeline 1 auto-follow
+   * skips that transcript entry so there is never a QUERY + ASSIST duplicate.
+   */
+  const voiceQueryHandledIdRef = useRef<string | null>(null);
 
-  // Auto-follow: every new participant remark produces its own answer for the
-  // active mode (What to say / Follow-up / Recap / Assist), so the widget keeps
-  // pace with the conversation without another click.
-  //
-  // There is deliberately NO isThinking gate and no debounce timer here: with
-  // both, a remark arriving while another answer was still in flight was
-  // dropped, and a burst of remarks collapsed into a single answer. Requests are
-  // serialized by askAssistant instead, so every remark is answered and the
-  // answers appear one by one.
+  // PIPELINE 1 — Continuous conversation context updater.
+  // Every new transcript entry updates the meeting context (liveTranscript).
+  // This effect ONLY triggers Pipeline 1 auto-mode responses (Assist / What to
+  // say / Follow-up / Recap). It does NOT trigger for entries that Pipeline 2
+  // (onVoiceQuery) is already handling — preventing QUERY + ASSIST duplicates.
   useEffect(() => {
     if (!autoFollowRef.current || liveTranscript.length === 0) return;
     const last = liveTranscript[liveTranscript.length - 1];
     if (!last || last.id === lastAutoAnsweredId.current) return;
     if (last.id.endsWith('-t') === false && (last.translatedText || '').includes('translating')) return;
+
+    // PIPELINE SEPARATION: If Pipeline 2 (onVoiceQuery) is already handling
+    // this exact transcript entry as an explicit question, skip the auto-follow
+    // response entirely. One spoken question → one Pipeline 2 answer only.
+    if (last.id === voiceQueryHandledIdRef.current) {
+      lastAutoAnsweredId.current = last.id;
+      return;
+    }
+
     // A recognizer glitch (or an echo) can re-emit the same words as a new
     // entry. Asking again would just repeat the previous answer, so the
     // already-answered text is remembered and skipped.
@@ -225,6 +256,7 @@ export const FloatingAssistantWidget: React.FC = () => {
     }
     lastAutoAnsweredId.current = last.id;
     lastAutoAnsweredTextRef.current = text;
+    // Pipeline 1: update meeting context via auto-mode response.
     if (activeAssistantMode === 'whatToSay') void askAssistant('What should I say right now to the interviewer/meeting?', 'say', { auto: true });
     else if (activeAssistantMode === 'followUp') void askAssistant('Give me smart follow-up questions to ask.', 'followup', { auto: true });
     else if (activeAssistantMode === 'recap') void askAssistant('Give me a quick recap of the conversation so far.', 'recap', { auto: true });
@@ -233,21 +265,42 @@ export const FloatingAssistantWidget: React.FC = () => {
   }, [liveTranscript.length]);
 
 
+  // --- Desktop always-on-top window (Document Picture-in-Picture) ----------
+  // The React app (meeting, transcript, AI, persistence) always runs in THIS
+  // opener document; the desktop window only hosts the widget's DOM through a
+  // portal. Opening, closing or hiding that window therefore never starts or
+  // stops a meeting — MeetingContext above is the single source of truth.
+  const {
+    isSupported: isDesktopWindowSupported,
+    window: desktopWindow,
+    container: desktopContainer,
+    openWindow: openDesktopWindow,
+    closeWindow: closeDesktopWindow,
+  } = useDesktopAssistantWindow();
+  // Event/viewport host: the PiP window while it is open (its events fire in
+  // its own document), otherwise the app window.
+  const hostEventTarget: Window = desktopWindow ?? window;
+  const hostDocument: Document = desktopWindow?.document ?? document;
+
   // Initialize Speech-to-Text + real-time translation.
   // Voice -> text -> (translated) -> LLM answer: when a voice question is
   // detected, route it to the assistant for a text answer.
   const { startListening, stopListening, isTranslating, isListening, isSupported } = useSpeechToText({
     language: selectedLanguage.code,
+    hostWindow: desktopWindow ?? undefined,
     targetLanguage: translationEnabled ? targetLanguage.code : undefined,
     speakTranslations,
     onTranscriptReceived: (entry) => {
       addTranscriptEntry(entry);
     },
     onVoiceQuery: (text) => {
-      // Voice question detected → send it to the LLM for an answer.
-      // The response is text and appears in the widget card; answers are never
-      // spoken aloud (only translated participant lines can be, via the mute
-      // toggle, and that is off by default).
+      // PIPELINE 2: Voice question detected → route to the QA pipeline.
+      // Record the latest transcript entry ID so Pipeline 1 auto-follow skips
+      // this same entry and never produces a QUERY + ASSIST duplicate.
+      const lastEntry = liveTranscript[liveTranscript.length - 1];
+      if (lastEntry) {
+        voiceQueryHandledIdRef.current = lastEntry.id;
+      }
       askAssistant(text, 'query');
     },
   });
@@ -262,6 +315,38 @@ export const FloatingAssistantWidget: React.FC = () => {
       stopListening();
     };
   }, [isFloatingActive, startListening, stopListening]);
+
+  // Desktop-window lifecycle tied to the MEETING (rising/falling edge):
+  //   meeting starts → the always-on-top window opens (falling back to the
+  //                     in-page widget when unsupported or when the browser
+  //                     refuses the open, e.g. without a user gesture)
+  //   meeting stops  → the window closes and cleans up (TEST 9/10)
+  // Closing the window MANUALLY is deliberately not wired into this effect:
+  // the meeting keeps running in MeetingContext and the widget simply
+  // reappears in-page until the user restores the desktop window
+  // (requirement: hiding/closing the assistant never ends the meeting).
+  const wasMeetingActiveRef = useRef(false);
+  useEffect(() => {
+    if (!isDesktopWindowSupported) return;
+    if (isFloatingActive && !wasMeetingActiveRef.current) {
+      void openDesktopWindow();
+    } else if (!isFloatingActive && wasMeetingActiveRef.current) {
+      closeDesktopWindow();
+    }
+    wasMeetingActiveRef.current = isFloatingActive;
+  }, [isFloatingActive, isDesktopWindowSupported, openDesktopWindow, closeDesktopWindow]);
+
+  // Remember where the widget was last dragged (in-page position; the OS
+  // position of the desktop window itself cannot be stored — the Document
+  // PiP API does not let the website read or set it).
+  useEffect(() => {
+    if (isDragging) return;
+    try {
+      localStorage.setItem(WIDGET_POSITION_KEY, JSON.stringify(position));
+    } catch {
+      // Storage unavailable — position memory is optional.
+    }
+  }, [position, isDragging]);
 
   // Auto scroll messages
   useEffect(() => {
@@ -293,9 +378,9 @@ export const FloatingAssistantWidget: React.FC = () => {
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isWidgetCollapsed, inputQuery, askAssistant, clearAssistantMessages, stopMeetingSession]);
+    hostEventTarget.addEventListener('keydown', handleKeyDown);
+    return () => hostEventTarget.removeEventListener('keydown', handleKeyDown);
+  }, [isWidgetCollapsed, inputQuery, askAssistant, clearAssistantMessages, stopMeetingSession, hostEventTarget]);
 
   // Close options menu on outside click
   useEffect(() => {
@@ -304,21 +389,25 @@ export const FloatingAssistantWidget: React.FC = () => {
         setIsMenuOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
-  }, []);
+    hostDocument.addEventListener('mousedown', handleOutsideClick);
+    return () => hostDocument.removeEventListener('mousedown', handleOutsideClick);
+  }, [hostDocument]);
 
-  // Keep the floating shell within the viewport when the window changes.
+  // Keep the floating shell within the viewport of whichever window hosts it
+  // (the PiP window while open, otherwise the app window), and re-clamp
+  // immediately whenever that host changes.
   useEffect(() => {
+    const viewport = desktopWindow ?? window;
     const handleViewportResize = () => {
       setPosition((currentPosition) =>
-        clampWidgetPosition(currentPosition, widgetRef.current)
+        clampWidgetPosition(currentPosition, widgetRef.current, viewport)
       );
     };
 
-    window.addEventListener('resize', handleViewportResize);
-    return () => window.removeEventListener('resize', handleViewportResize);
-  }, []);
+    handleViewportResize();
+    viewport.addEventListener('resize', handleViewportResize);
+    return () => viewport.removeEventListener('resize', handleViewportResize);
+  }, [desktopWindow]);
 
   // Draggable logic
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -349,14 +438,14 @@ export const FloatingAssistantWidget: React.FC = () => {
     };
 
     if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
+      hostEventTarget.addEventListener('mousemove', handleMouseMove);
+      hostEventTarget.addEventListener('mouseup', handleMouseUp);
     }
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      hostEventTarget.removeEventListener('mousemove', handleMouseMove);
+      hostEventTarget.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, dragOffset]);
+  }, [isDragging, dragOffset, hostEventTarget]);
 
   if (!isFloatingActive) return null;
 
@@ -398,11 +487,10 @@ export const FloatingAssistantWidget: React.FC = () => {
 
   const assistantModeButtonClass = (mode: AssistantMode) => {
     const isActive = activeAssistantMode === mode;
-    return `flex items-center gap-1 px-2 py-1 rounded-lg transition-colors cursor-pointer ${
-      isActive
-        ? 'bg-white/15 text-white shadow-sm ring-1 ring-white/20'
-        : 'text-slate-300 hover:bg-white/10 hover:text-white'
-    }`;
+    return `flex items-center gap-1 px-2 py-1 rounded-lg transition-colors cursor-pointer ${isActive
+      ? 'bg-white/15 text-white shadow-sm ring-1 ring-white/20'
+      : 'text-slate-300 hover:bg-white/10 hover:text-white'
+      }`;
   };
 
   const cardHeightClasses = {
@@ -411,7 +499,7 @@ export const FloatingAssistantWidget: React.FC = () => {
     expanded: 'max-h-[380px]',
   };
 
-  return (
+  const widgetNode = (
     <div
       ref={widgetRef}
       style={{ left: `${position.x}px`, top: `${position.y}px` }}
@@ -447,6 +535,33 @@ export const FloatingAssistantWidget: React.FC = () => {
         >
           {isWidgetCollapsed ? 'Show' : 'Hide'}
         </button>
+
+        {/* Desktop always-on-top window toggle (Document PiP; Chromium-only) */}
+        {isDesktopWindowSupported && (
+          <button
+            type="button"
+            onClick={() => {
+              if (desktopWindow) closeDesktopWindow();
+              else void openDesktopWindow();
+            }}
+            title={
+              desktopWindow
+                ? 'Close desktop floating window (meeting keeps running)'
+                : 'Open desktop floating window (always on top)'
+            }
+            aria-label={
+              desktopWindow
+                ? 'Close desktop floating window'
+                : 'Open desktop floating window'
+            }
+            className={`h-6 w-6 rounded-full flex items-center justify-center transition-colors cursor-pointer ${desktopWindow
+              ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
+              : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              }`}
+          >
+            <PictureInPicture className="w-3.5 h-3.5" />
+          </button>
+        )}
 
         <button
           onClick={stopMeetingSession}
@@ -564,92 +679,92 @@ export const FloatingAssistantWidget: React.FC = () => {
           </div>
           {/* Response Feed & Live Meeting Follow-up stream with Dynamic Height */}
           {liveTab === 'conversation' ? (
-              <LiveConversationPane liveTranscript={currentMeetingTranscript} liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} copiedId={copiedId} onCopy={handleCopy} onQuickAction={(m) => { setLiveTab('answers'); handleAssistantModeChange(m); }} isListening={isListening} isSupported={isSupported} />
-            ) : liveTab === 'brief' ? (
-              <LiveBriefPane liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} />
-            ) : (
+            <LiveConversationPane liveTranscript={currentMeetingTranscript} liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} copiedId={copiedId} onCopy={handleCopy} onQuickAction={(m) => { setLiveTab('answers'); handleAssistantModeChange(m); }} isListening={isListening} isSupported={isSupported} />
+          ) : liveTab === 'brief' ? (
+            <LiveBriefPane liveBrief={liveBrief} checkedActions={checkedActions} toggleActionCheck={toggleActionCheck} />
+          ) : (
             /* liveTab panes */
-<div className={`${cardHeightClasses[answerCardSize]} overflow-y-auto px-4 py-3 space-y-3 divide-y divide-slate-800/40 text-xs text-slate-200 transition-all duration-200`}>
-            {assistantMessages.length === 0 ? (
-              <div className="py-4 text-center text-slate-400 flex flex-col items-center gap-1.5">
-                <Mic className="w-4 h-4 text-emerald-400 animate-pulse" />
-                <span>MEETX is following the meeting in real-time...</span>
-                <span className="text-[10px] text-slate-500">
-                  Topic: {activeMeeting?.topic} • {activeMeeting?.pastedNotes ? 'Knowledge-base loaded' : 'Default mode'}
-                </span>
-              </div>
-            ) : (
-              assistantMessages.map((msg) => (
-                <div key={msg.id} className="pt-2.5 first:pt-0">
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1.5">
-                    <span className="font-semibold uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
-                      <span>{msg.sender === 'user' ? 'You' : `MeetX Assistant ${msg.actionType ? `• ${msg.actionType}` : ''}`}</span>
-                    </span>
-
-                    <div className="flex items-center gap-2">
-                      {msg.sender === 'assistant' && (
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(msg.id, msg.text)}
-                          className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/80 transition-all cursor-pointer shadow-xs active:scale-95"
-                          title="Copy full solution to clipboard"
-                        >
-                          {copiedId === msg.id ? (
-                            <>
-                              <Check className="w-3 h-3 text-emerald-400" />
-                              <span className="text-emerald-400 font-semibold text-[10px]">Copied!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3 h-3 text-slate-400" />
-                              <span className="text-[10px]">Copy Solution</span>
-                            </>
-                          )}
-                        </button>
-                      )}
-                      <span>{msg.time}</span>
-                    </div>
-                  </div>
-                  <div className="text-xs text-slate-100">
-                    {renderMessageContent(msg.text, msg.id, copiedId, handleCopy)}
-                  </div>
-
-                  {/* Proactive follow-up suggestion chips */}
-                  {msg.followupSuggestions && msg.followupSuggestions.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {msg.followupSuggestions.map((suggestion, sIdx) => (
-                        <button
-                          key={sIdx}
-                          onClick={() => askAssistant(suggestion, 'query')}
-                          className="px-2 py-0.5 rounded-full bg-blue-500/10 hover:bg-blue-500/20 border border-blue-400/20 text-[10px] text-blue-300 transition-colors cursor-pointer flex items-center gap-1"
-                        >
-                          <span>{suggestion}</span>
-                          <ArrowRight className="w-2.5 h-2.5" />
-                        </button>
-                      ))}
-                    </div>
-                  )}
+            <div className={`${cardHeightClasses[answerCardSize]} overflow-y-auto px-4 py-3 space-y-3 divide-y divide-slate-800/40 text-xs text-slate-200 transition-all duration-200`}>
+              {assistantMessages.length === 0 ? (
+                <div className="py-4 text-center text-slate-400 flex flex-col items-center gap-1.5">
+                  <Mic className="w-4 h-4 text-emerald-400 animate-pulse" />
+                  <span>MEETX is following the meeting in real-time...</span>
+                  <span className="text-[10px] text-slate-500">
+                    Topic: {activeMeeting?.topic} • {activeMeeting?.pastedNotes ? 'Knowledge-base loaded' : 'Default mode'}
+                  </span>
                 </div>
-              ))
-            )}
+              ) : (
+                assistantMessages.map((msg) => (
+                  <div key={msg.id} className="pt-2.5 first:pt-0">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1.5">
+                      <span className="font-semibold uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
+                        <span>{msg.sender === 'user' ? 'You' : `MeetX Assistant ${msg.actionType ? `• ${msg.actionType}` : ''}`}</span>
+                      </span>
 
-            {/* Real-time Thinking & Synthesizing State Indicator */}
-            {isThinking && (
-              <div className="pt-2 flex items-center gap-2 text-xs text-blue-400 font-medium animate-in fade-in duration-150">
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
-                <span className="animate-pulse text-blue-300">MEETX is synthesizing your real-time response...</span>
-              </div>
-            )}
-            {liveTab === 'answers' && isTranslating && (
-              <div className="pt-1 flex items-center gap-2 text-[11px] text-emerald-400 font-medium">
-                <Languages className="w-3.5 h-3.5 animate-pulse" />
-                <span>Translating live speech → {targetLanguage.name}…</span>
-              </div>
-            )}
+                      <div className="flex items-center gap-2">
+                        {msg.sender === 'assistant' && (
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(msg.id, msg.text)}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/80 transition-all cursor-pointer shadow-xs active:scale-95"
+                            title="Copy full solution to clipboard"
+                          >
+                            {copiedId === msg.id ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span className="text-emerald-400 font-semibold text-[10px]">Copied!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3 text-slate-400" />
+                                <span className="text-[10px]">Copy Solution</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                        <span>{msg.time}</span>
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-100">
+                      {renderMessageContent(msg.text, msg.id, copiedId, handleCopy)}
+                    </div>
 
-            <div ref={messagesEndRef} />
-          </div>
-            )}
+                    {/* Proactive follow-up suggestion chips */}
+                    {msg.followupSuggestions && msg.followupSuggestions.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {msg.followupSuggestions.map((suggestion, sIdx) => (
+                          <button
+                            key={sIdx}
+                            onClick={() => askAssistant(suggestion, 'query')}
+                            className="px-2 py-0.5 rounded-full bg-blue-500/10 hover:bg-blue-500/20 border border-blue-400/20 text-[10px] text-blue-300 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <span>{suggestion}</span>
+                            <ArrowRight className="w-2.5 h-2.5" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+
+              {/* Real-time Thinking & Synthesizing State Indicator */}
+              {isThinking && (
+                <div className="pt-2 flex items-center gap-2 text-xs text-blue-400 font-medium animate-in fade-in duration-150">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                  <span className="animate-pulse text-blue-300">MEETX is synthesizing your real-time response...</span>
+                </div>
+              )}
+              {liveTab === 'answers' && isTranslating && (
+                <div className="pt-1 flex items-center gap-2 text-[11px] text-emerald-400 font-medium">
+                  <Languages className="w-3.5 h-3.5 animate-pulse" />
+                  <span>Translating live speech → {targetLanguage.name}…</span>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+          )}
 
           {/* Prompt Input Box */}
           <div className="p-3 bg-[#13151c]/90 rounded-b-2xl border-t border-slate-800/80 flex flex-col gap-2 relative">
@@ -767,7 +882,7 @@ export const FloatingAssistantWidget: React.FC = () => {
                           <span>›</span>
                         </div>
 
-                        <div 
+                        <div
                           onClick={() => {
                             setIsPlatformClosed(false);
                             setIsMenuOpen(false);
@@ -782,7 +897,7 @@ export const FloatingAssistantWidget: React.FC = () => {
                   )}
                 </div>
 
-                
+
               </div>
 
               {/* Blue Send Arrow Button */}
@@ -800,4 +915,11 @@ export const FloatingAssistantWidget: React.FC = () => {
       )}
     </div>
   );
+
+  // Desktop mode: portal the SAME widget tree into the always-on-top window.
+  // Meeting state is unaffected by this switch — it lives in MeetingContext
+  // above; closing the window simply falls back to the in-page render until
+  // the user restores the desktop window (same session, same state).
+  if (desktopContainer) return createPortal(widgetNode, desktopContainer);
+  return widgetNode;
 };

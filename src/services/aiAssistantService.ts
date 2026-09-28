@@ -1,5 +1,6 @@
 import { MeetingTranscriptEntry, MeetingResource } from '../types/meeting';
 import { callGemini, callGroq, geminiKey, groqKey } from './llmProviders';
+import { determineContextRelevance, formatContextDecision } from './meetingContextService';
 
 export interface AssistantContext {
   topic: string;
@@ -44,7 +45,30 @@ function buildOfflineConversationAnswer(
   context: AssistantContext
 ): OfflineAnswer {
   const entries = (context.transcript || []).filter((t) => (t.text || '').trim());
-  const lastLines = entries.slice(-8).map((t) => {
+  // PIPELINE 2: Use intelligent historical retrieval rather than a fixed tail.
+  // For query action types, retrieve context relevant to the question;
+  // for other actions (assist/say/followup/recap) use the most recent 12 lines.
+  const recentCount = actionType === 'query' ? 6 : 12;
+  const selectedEntries = actionType === 'query' && entries.length > recentCount
+    ? (() => {
+        // Simple keyword-based retrieval from older entries for offline mode.
+        const recent = entries.slice(-recentCount);
+        const older = entries.slice(0, Math.max(0, entries.length - recentCount));
+        const qWords = new Set(
+          (queryOrAction || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 3)
+        );
+        const relevant = older
+          .filter((e) => {
+            const words = (e.text || '').toLowerCase().split(/\s+/);
+            return words.some((w) => qWords.has(w));
+          })
+          .slice(-4);
+        // Combine: relevant older + recent, deduplicated, chronological.
+        const seen = new Set<string>();
+        return [...relevant, ...recent].filter((e) => seen.has(e.id) ? false : (seen.add(e.id), true));
+      })()
+    : entries.slice(-recentCount);
+  const lastLines = selectedEntries.map((t) => {
     const speaker = t.speakerName || t.speakerId || 'Speaker';
     const body = (t.translatedText && t.translatedText !== '\u2026translating\u2026' ? t.translatedText : t.text).trim();
     return speaker + ' [' + t.timestamp + ']: ' + body;
@@ -142,6 +166,44 @@ export const generateAssistantResponse = async (
     'Give me 2 follow-up questions',
     'Summarize recent points',
   ];
+
+  // PIPELINE 2: For explicit user questions (actionType === 'query'), determine
+  // context relevance BEFORE calling the LLM. This implements the context
+  // decision tree described in the task specification.
+  if (actionType === 'query' && (geminiKey() || groqKey())) {
+    const decision = determineContextRelevance(
+      queryOrAction,
+      context.transcript,
+      context.resources,
+      context.topic,
+      context.pastedNotes || ''
+    );
+    if (process.env.NODE_ENV === 'development' || (import.meta as any).env?.DEV) {
+      console.debug(formatContextDecision(decision));
+    }
+    // The decision is used by buildPrompt in llmProviders.ts via the context
+    // object — the selectConversationContext function already implements the
+    // intelligent retrieval. The decision here is informational (for logging)
+    // and for the unrelated-question fast-path.
+    if (decision.relevance === 'unrelated') {
+      // Direct LLM path: no meeting context injected, just the question.
+      // This prevents unrelated meeting chunks from polluting the answer.
+      const directContext: AssistantContext = {
+        ...context,
+        transcript: [],  // No meeting transcript for unrelated questions
+        pastedNotes: '', // No meeting notes
+        resources: [],   // No meeting resources
+      };
+      const groqAnswer = await callGroq(queryOrAction, directContext, actionType);
+      if (groqAnswer) return { text: groqAnswer, followupSuggestions: suggestions, source: 'llm' };
+      const geminiAnswer = await callGemini(queryOrAction, directContext, actionType);
+      if (geminiAnswer) return { text: geminiAnswer, followupSuggestions: suggestions, source: 'llm' };
+      return { text: PROVIDER_UNAVAILABLE_MESSAGE, followupSuggestions: suggestions, source: 'provider-unavailable' };
+    }
+    // For meeting-related questions: fall through to the standard RAG path below
+    // which uses selectConversationContext for intelligent retrieval.
+  }
+
   // 1. Groq FIRST for realtime questions. openai/gpt-oss-120b is the realtime
   //    model: measured live, it answers in ~0.5-1.3 s, while the Gemini models
   //    were returning 503 "high demand" / 4 s timeouts from this network, which

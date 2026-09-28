@@ -18,7 +18,7 @@ import { Meeting, getLanguageDisplayName } from '../types/meeting';
 import { getUserMeetings, deleteMeeting } from '../services/meetingService';
 import { buildSummaryFromTranscript } from '../services/meetingInsightService';
 
-type PeriodFilter = '1day' | '1week' | '1month' | 'custom';
+type PeriodFilter = '1day' | '1week' | '1month' | 'all' | 'custom';
 type MeetingBucket = 'today' | 'week' | 'month' | 'earlier';
 
 const startOfToday = (): number => {
@@ -64,7 +64,7 @@ export const MeetingHistoryPage: React.FC = () => {
   const { searchQuery } = useMeeting();
   const [userMeetings, setUserMeetings] = useState<Meeting[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [filterPeriod, setFilterPeriod] = useState<PeriodFilter>('1week');
+  const [filterPeriod, setFilterPeriod] = useState<PeriodFilter>('all');
   // Three-dots menu state (Share / Delete) per meeting row.
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [confirmDeleteFor, setConfirmDeleteFor] = useState<string | null>(null);
@@ -106,6 +106,7 @@ export const MeetingHistoryPage: React.FC = () => {
 
   const matchesPeriod = (m: Meeting): boolean => {
     const ts = m.createdAt || 0;
+    if (filterPeriod === 'all') return true;
     if (filterPeriod === 'custom') {
       if (customStartDate) {
         const start = new Date(customStartDate + 'T00:00:00').getTime();
@@ -120,7 +121,8 @@ export const MeetingHistoryPage: React.FC = () => {
     const bucket = bucketFor(ts);
     if (filterPeriod === '1day') return bucket === 'today';
     if (filterPeriod === '1week') return bucket === 'today' || bucket === 'week';
-    return bucket !== 'earlier';
+    if (filterPeriod === '1month') return bucket === 'today' || bucket === 'week' || bucket === 'month';
+    return true;
   };
 
 
@@ -200,6 +202,7 @@ export const MeetingHistoryPage: React.FC = () => {
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-2">Filter:</span>
           {(
             [
+              { id: 'all', label: 'All Time' },
               { id: '1day', label: '1 Day' },
               { id: '1week', label: '1 Week' },
               { id: '1month', label: '1 Month' },

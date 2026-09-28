@@ -12,6 +12,15 @@ interface UseSpeechToTextProps {
   speakTranslations?: boolean;
   onTranscriptReceived: (entry: MeetingTranscriptEntry) => void;
   onVoiceQuery?: (text: string) => void;
+  /**
+   * Window whose realm hosts the Web Speech recognizer. Defaults to the app
+   * window. The desktop floating window (Document Picture-in-Picture) passes
+   * its own window so recognition runs in the ALWAYS-VISIBLE document: the
+   * opener tab can be backgrounded when the user switches tabs or
+   * applications — which may stall recognition — while the PiP window itself
+   * stays visible and on top of other apps.
+   */
+  hostWindow?: Window;
 }
 
 /** Heuristic: does this utterance look like a question worth sending to the LLM? */
@@ -21,7 +30,7 @@ const looksLikeQuestion = (text: string): boolean => {
   return /^(what|how|should|can|could|would|tell me|explain|summar|giv|recap|assist|advise|help|meaning|reason|why)\b/.test(t);
 };
 
-export const useSpeechToText = ({ language, targetLanguage, speakTranslations, onTranscriptReceived, onVoiceQuery }: UseSpeechToTextProps) => {
+export const useSpeechToText = ({ language, targetLanguage, speakTranslations, onTranscriptReceived, onVoiceQuery, hostWindow }: UseSpeechToTextProps) => {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -105,7 +114,13 @@ export const useSpeechToText = ({ language, targetLanguage, speakTranslations, o
   const startTokenRef = useRef(0);
 
   const startListening = useCallback(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    // Prefer the constructors of the HOST window (the desktop floating window
+    // when it is open) and fall back to the app window, so a host without the
+    // Web Speech API degrades to the opener instead of to "unsupported".
+    const host = hostWindow ?? window;
+    const SpeechRecognition =
+      (host as any).SpeechRecognition || (host as any).webkitSpeechRecognition ||
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setIsSupported(false);
       setIsListening(true);
@@ -274,11 +289,12 @@ export const useSpeechToText = ({ language, targetLanguage, speakTranslations, o
       }
       buildAndStart(stream);
     })();
-    // F1: `language` is the only value that genuinely configures the recognizer
-    // (`recognition.lang`). Callbacks, target language and the speak-aloud flag
-    // are read from refs, so new callback identities and unrelated state changes
-    // no longer tear the instance down.
-  }, [language, openFocusedMicStream, releaseMicStream]);
+    // F1: `language` and `hostWindow` are the only values that genuinely
+    // configure the recognizer (`recognition.lang` + which realm it lives in).
+    // Callbacks, target language and the speak-aloud flag are read from refs,
+    // so new callback identities and unrelated state changes no longer tear
+    // the instance down.
+  }, [language, hostWindow, openFocusedMicStream, releaseMicStream]);
 
   const stopListening = useCallback(() => {
     // F1: mark the session stopped BEFORE stopping the recognizer so its onend

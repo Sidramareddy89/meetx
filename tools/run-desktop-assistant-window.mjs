@@ -1,23 +1,24 @@
 /**
- * MEETX — harness for tools/widget-realtime-flow.test.mjs
+ * MEETX — harness for tools/desktop-assistant-window.test.mjs
  *
- * Bundles the REAL `FloatingAssistantWidget` (and everything it pulls in: the
- * real MeetingContext, meetingService, meetingInsightService, LiveConversationPane
- * and LiveBriefPane) with esbuild, substituting only what Node cannot run:
+ * Bundles the REAL `FloatingAssistantWidget` + `MeetingProvider` (and
+ * everything they pull in: meetingService, meetingInsightService,
+ * aiAssistantService, the REAL useSpeechToText hook) with esbuild,
+ * substituting only what Node cannot run:
  *
  *   react / react/jsx-runtime    -> tools/react-hook-shim.mjs (hook runtime)
+ *   react-dom                    -> portal records its container, renders inline
  *   react-router-dom             -> useNavigate
  *   lucide-react                 -> inert icon components
  *   ./AuthContext                -> tools/auth-context-stub.mjs (test user)
- *   ../../hooks/useSpeechToText  -> stub exposing the SAME callbacks the real
- *                                   hook calls (no Web Speech API in Node)
  *   firebase/*, ../config/firebase -> in-memory Firestore double
  *
- * The MeetingContext is NOT stubbed: the widget runs against the real provider,
- * so this exercises the real auto-answer effect and the real serialized queue.
+ * NOTE: `useSpeechToText` is NOT stubbed here — the real hook runs against
+ * Node (its Web-Speech-absent fallback path), which also exercises the new
+ * `hostWindow` wiring without a browser.
  *
- * Usage:  node tools/run-widget-realtime-flow.mjs
- * Exit code 0 = all realtime widget assertions passed.
+ * Usage:  node tools/run-desktop-assistant-window.mjs
+ * Exit code 0 = all desktop-window lifecycle assertions passed.
  */
 
 import { build } from 'esbuild';
@@ -27,10 +28,10 @@ import { dirname, resolve } from 'node:path';
 import { existsSync, rmSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const entry = resolve(__dirname, 'widget-realtime-flow.test.mjs');
+const entry = resolve(__dirname, 'desktop-assistant-window.test.mjs');
 const reactShim = resolve(__dirname, 'react-hook-shim.mjs');
 const authStub = resolve(__dirname, 'auth-context-stub.mjs');
-const outfile = resolve(__dirname, '.widget-realtime-flow.tmp.mjs');
+const outfile = resolve(__dirname, '.desktop-assistant-window.tmp.mjs');
 
 const FIREBASE_STUB = `
 const store = () => (globalThis.__meetxFs = globalThis.__meetxFs || new Map());
@@ -108,30 +109,8 @@ export const createPortal = (children, container) => {
 export default { createPortal };
 `;
 
-/**
- * The real Web Speech API does not exist in Node. This stub keeps the real
- * hook's CONTRACT: it records the callbacks the widget registers and hands them
- * back to the test, so the test drives speech exactly the way the browser would.
- */
-const SPEECH_STUB = `
-export const useSpeechToText = (options) => {
-  globalThis.__speech = {
-    onTranscriptReceived: options.onTranscriptReceived,
-    onVoiceQuery: options.onVoiceQuery,
-  };
-  return {
-    isListening: true,
-    isSupported: true,
-    isTranslating: false,
-    startListening: () => {},
-    stopListening: () => {},
-  };
-};
-export default { useSpeechToText };
-`;
-
 const stubPlugin = {
-  name: 'meetx-widget-boundaries',
+  name: 'meetx-desktop-window-boundaries',
   setup(buildApi) {
     const namespace = 'meetx-stub';
     buildApi.onResolve({ filter: /^react$/ }, () => ({ path: reactShim }));
@@ -140,13 +119,11 @@ const stubPlugin = {
     buildApi.onResolve({ filter: /AuthContext$/ }, () => ({ path: authStub }));
     buildApi.onResolve({ filter: /^react-router-dom$/ }, () => ({ path: 'router-stub', namespace }));
     buildApi.onResolve({ filter: /^lucide-react$/ }, () => ({ path: 'icon-stub', namespace }));
-    buildApi.onResolve({ filter: /hooks\/useSpeechToText$/ }, () => ({ path: 'speech-stub', namespace }));
     buildApi.onResolve({ filter: /^(firebase\/.*|\.\.\/config\/firebase)$/ }, () => ({ path: 'firebase-stub', namespace }));
     buildApi.onLoad({ filter: /.*/, namespace }, ({ path }) => {
       const contents =
         path === 'router-stub' ? ROUTER_STUB
         : path === 'icon-stub' ? ICON_STUB
-        : path === 'speech-stub' ? SPEECH_STUB
         : path === 'react-dom-stub' ? REACT_DOM_STUB
         : FIREBASE_STUB;
       return { contents, loader: 'js' };
@@ -155,7 +132,7 @@ const stubPlugin = {
 };
 
 if (!existsSync(entry) || !existsSync(reactShim) || !existsSync(authStub)) {
-  console.error('! widget realtime flow harness inputs missing');
+  console.error('! desktop assistant window harness inputs missing');
   process.exit(1);
 }
 

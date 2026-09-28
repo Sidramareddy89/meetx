@@ -86,8 +86,8 @@ export function buildMeetingInsights(
     overview: summary.overview,
     // Prefer the brief's richer extraction, fall back to the summary's own.
     keyPoints: brief && brief.keyPoints.length ? brief.keyPoints : summary.keyPoints || [],
-    actions: brief && brief.actions.length ? brief.actions.map((a) => a.text) : summary.actions || [],
-    deadlines: brief ? brief.deadlines.map((d) => d.text) : [],
+    actions: brief && brief.actions.length ? brief.actions.map((a) => (a.assignee ? `[Assignee: ${a.assignee}] ` : "") + a.text) : summary.actions || [],
+    deadlines: brief ? brief.deadlines.map((d) => (d.date ? `[Due: ${d.date}] ` : "") + d.text) : [],
     reminders: brief ? brief.reminders : [],
     updatedAt: Date.now(),
   };
@@ -317,34 +317,46 @@ export function buildLiveBrief(
 
   const actions: ConversationActionItem[] = [];
   const deadlines: ConversationDeadline[] = [];
-  for (const e of entries) {
+  
+  // Process all entries, prioritizing newest ones if there are too many, but let's just collect all reasonable ones.
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
     if (!ACTION_VERBS.test(e.text)) continue;
     const text = e.text.trim().slice(0, 220);
     const due = extractDueDate(e.text);
-    actions.push({
-      id: e.id + '-action',
-      text,
-      assignee: extractAssignee(e.text),
-      dueDate: due,
-      done: false,
-    });
-    if (due && deadlines.length < 8) {
-      deadlines.push({ id: e.id + '-due', text, date: due });
+    const assignee = extractAssignee(e.text);
+    
+    // Determine if it's explicitly a deadline statement vs a general action
+    const isDeadline = /\b(deadline|due by|by (monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|eod|end of (day|week)))\b/i.test(e.text);
+
+    if (isDeadline || due) {
+      if (deadlines.length < 15) {
+        deadlines.unshift({ id: e.id + '-due', text, date: due });
+      }
+    } else {
+      if (actions.length < 20) {
+        actions.unshift({
+          id: e.id + '-action',
+          text,
+          assignee,
+          dueDate: due,
+          done: false,
+        });
+      }
     }
-    if (actions.length >= 10) break;
   }
 
-  const questions = entries.filter((e: MeetingTranscriptEntry) => QUESTION_RE.test(e.text.trim())).slice(-3);
+  const questions = entries.filter((e: MeetingTranscriptEntry) => QUESTION_RE.test(e.text.trim())).slice(-5);
   const reminders = [
-    ...deadlines.slice(0, 3).map((d) => '\u23F0 Reminder: ' + d.date + ' \u2014 ' + d.text.slice(0, 100)),
+    ...deadlines.slice(0, 5).map((d) => '\u23F0 Reminder: ' + (d.date ? d.date + ' \u2014 ' : '') + d.text.slice(0, 100)),
     ...questions.map((q: MeetingTranscriptEntry) => '\u2753 Open question: "' + q.text.trim().slice(0, 110) + '"'),
-  ].slice(0, 6);
+  ].slice(0, 10);
 
   return {
     title,
     summary,
     keyPoints,
-    actions: actions.slice(0, 10),
+    actions,
     deadlines,
     reminders,
     updatedAt: Date.now(),

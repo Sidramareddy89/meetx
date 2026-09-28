@@ -4,7 +4,7 @@
 > This document is the single source of truth for picking the project up: how to run it, what
 > actually exists in the code today, how it is wired, and what is still missing/broken.
 >
-> Snapshot date: **2026-09-21** Â· Verified against commit-less working tree (`E:\Meetin advisor`).
+> Snapshot date: **2026-09-28** Â· Verified against commit-less working tree (`E:\Meetin advisor`).
 > Everything below was verified by reading the source and running the commands listed in
 > [Â§11 Verification](#11-verification--how-to-check-claims-in-this-doc).
 
@@ -14,16 +14,16 @@
 
 | Item | Status |
 |---|---|
-| `npx tsc --noEmit` | âœ… **passes clean** (exit 0, zero output) â€” re-verified 2026-09-27 |
-| `npm run build` | âœ… works â€” rebuilt 2026-09-27 (`dist/assets/index-*.js` â‰ˆ 859 kB / 216 kB gzip; Vite warns above 500 kB, no code-splitting yet) |
+| `npx tsc --noEmit` | âœ… **passes clean** (exit 0, zero output) â€” re-verified 2026-09-28 |
+| `npm run build` | âœ… works â€” rebuilt 2026-09-28 (`dist/assets/index-*.js` â‰ˆ 859 kB / 216 kB gzip; Vite warns above 500 kB, no code-splitting yet) |
 | Firebase | âš ï¸ **configured with real values** in `.env` â€” no placeholders remain, so the app runs in Firebase mode, not demo mode. Security rules and the `userId ASC + createdAt DESC` composite index are still unproven (G3) |
-| AI responses | âœ… **Live, not templates.** Groq `openai/gpt-oss-120b` is the realtime model, Gemini is the fallback; latency, 429/timeout failover and outage labelling are covered by the harnesses. The offline engine only answers when no key is configured, and says so |
+| AI responses | ? **Dual-Pipeline Architecture:** Pipeline 1 continuous context updater + Pipeline 2 QA context decision engine. Groq/Gemini fallbacks intact. Fixed QUERY+ASSIST duplicates. |
 | Answer grounding | âœ… Per-question context: the newest 12 remarks always travel, older remarks are pulled back in when relevant, uploaded documents are retrieved rather than dumped, and everything is character-budgeted (Â§9 F4) |
 | Transcription | âœ… Real, via browser Web Speech API (`useSpeechToText`). Microphone only â€” not system/meeting audio (G8) |
 | Persistence | Works, localStorage-first with Firestore when configured. The transcript is **merged, never replaced**, and flushed on stop, on meeting switch and on `pagehide`/`beforeunload` (G1, G2 closed) |
 | Tests | âœ… **8 harnesses / 343 assertions** under `tools/`, driven by `node tools/run-*.mjs` (Â§11). âŒ No lint, no CI workflow |
 | Git | âœ… repository with history on `main`, remote `origin` â†’ `github.com/Sidramareddy89/meetx` |
-| Secrets | ðŸ”´ **P1 â€” LLM keys ship inside the client bundle.** Verified 2026-09-27: the Groq key prefix is present in `dist/assets/*.js`. See G9 |
+| Secrets | ðŸ”´ **P1 â€” LLM keys ship inside the client bundle.** verified 2026-09-28: the Groq key prefix is present in `dist/assets/*.js`. See G9 |
 | Dead code | âœ… `LiveMeetingChatPanel.tsx` has been deleted (G11) |
 
 ---
@@ -268,8 +268,8 @@ meetings can be hidden whenever Firestore has at least one record.
 | F12 | Floating widget UX | `FloatingAssistantWidget` | drag by handle, Hide/Show pill, card sizes compact/normal/expanded (`max-h-36 / max-h-56 / max-h-[380px]`), stop button, MX logo â†’ `/home`, code-block renderer with per-block copy |
 | F13 | Keyboard shortcuts | widget `keydown` effect | `Ctrl+\` hide/show Â· `Ctrl+Enter` send (or "what should I say") Â· `Ctrl+R` clear assistant messages Â· `Ctrl+Shift+\` stop session (âš ï¸ `Ctrl+R` shadows browser reload) |
 | F14 | Free-plan gate | `MeetingContext.startMeetingSession` + `ChoosePlanModal` | 3 free meetings; at 0 the session is refused and the plan modal opens; `upgradeToPro('pro' \| 'pro_undetectable')` only flips `localStorage` (no payment) |
-| F15 | Meeting history | `MeetingHistoryPage` | period filter `1day` / `1week` (default) / `1month` / `custom`, buckets today-week-month-earlier, text filter on title/topic/platform, sorted `createdAt` desc |
-| F16 | Meeting details + insights | `MeetingDetailPage`, `meetingInsightService` | overview/key points/actions derived **from the actual transcript only** (â‰¤6 evenly sampled key points, â‰¤5 actions matched by `ACTION_PATTERNS`); empty transcript â‡’ explicit "not available" copy, never invented content |
+| F15 | Meeting history | MeetingHistoryPage | period filter ll (default) / 1day / 1week / 1month / custom, text filter, sorted createdAt desc. Fixed bucket filtering bugs. |
+| F16 | Meeting details + insights | MeetingDetailPage, meetingInsightService | overview/key points/actions derived from actual transcript. Enhanced extraction for Actions/Deadlines preserving assignees and dates in storage. |
 | F17 | Share / minutes export | `MeetingDetailPage.handleShare` | `navigator.share` when available, else copies `buildShareableMinutes()` (+ detail URL) to the clipboard |
 | F18 | Ask about a past meeting | `MeetingDetailPage` fixed bottom bar | starts/reuses the live context so questions run through the same assistant pipeline |
 | F19 | Live "Meeting Inquiries" log | `MeetingDetailPage` | renders `assistantMessages` only while `activeMeeting.id === meeting.id` |
@@ -309,7 +309,7 @@ Gotchas baked into this flow:
 
 ## 10. Known gaps, risks and TODO backlog
 
-Priority: **P1** = user-visible / data-loss / blocking, **P2** = product-quality, **P3** = cleanup. |`n|---|---|`n| > **Status snapshot, 2026-09-27** — Closed since 2026-09-21: **G1, G2** (transcript flush on stop/switch/pagehide; residual chat-log persistence remains), **G6, G7, G10, G11, G12, G13**. Partial: **G3** (`.env` now real, rules/index unverified), **G14** (git + 8 harnesses, no lint/CI). Urgent: **G9** is now **P1** — LLM keys verified present in the client bundle. Still genuinely open: **G4, G5, G8, G15, G16**.
+Priority: **P1** = user-visible / data-loss / blocking, **P2** = product-quality, **P3** = cleanup. |`n|---|---|`n| > **Status snapshot, 2026-09-28** — Closed since 2026-09-21: **G1, G2** (transcript flush on stop/switch/pagehide; residual chat-log persistence remains), **G6, G7, G10, G11, G12, G13**. Partial: **G3** (`.env` now real, rules/index unverified), **G14** (git + 8 harnesses, no lint/CI). Urgent: **G9** is now **P1** — LLM keys verified present in the client bundle. Still genuinely open: **G4, G5, G8, G15, G16**.
 
 | ID | Pri | Issue | Evidence / fix sketch |
 |---|---|---|---|
@@ -445,3 +445,4 @@ console. Expected `PHASE4-TEST` lines:
 | Basis | Read of all 30 files under `src/` + `public/` + root config; `npx tsc --noEmit` (exit 0); `npm run build` output inspection; recursive filename/content searches proving no previous handoff document existed |
 | Status legend | âœ… verified working Â· âš ï¸ works but limited/unverified Â· âŒ missing |
 | Maintenance | Update Â§1, Â§9 (features) and Â§10 (gaps) whenever behaviour changes, and keep the gap IDs (`G1`â€¦`G16`) stable so they can be referenced from commits and issues |
+
