@@ -11,7 +11,9 @@ import {
   CheckCircle2,
   FileCheck,
   AlertCircle,
-  ExternalLink
+  ExternalLink,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useProfileGate } from '../hooks/useProfileGate';
@@ -28,7 +30,7 @@ export const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   useProfileGate();
-  const { selectedLanguage, isDetectable, startMeetingSession, freeMeetingsLeft, isProUser } = useMeeting();
+  const { selectedLanguage, isDetectable, setIsDetectable, startMeetingSession, freeMeetingsLeft, isProUser } = useMeeting();
 
   const [platform, setPlatform] = useState<MeetingPlatform | null>(null);
   const [meetingLink, setMeetingLink] = useState('');
@@ -182,12 +184,34 @@ export const HomePage: React.FC = () => {
             <h2 className="text-sm font-semibold text-slate-900">
               Welcome to MEETX {currentUser?.displayName ? `, ${currentUser.displayName}` : ''}
             </h2>
-            <p className="text-xs text-slate-500">
-              Selected language: <span className="font-medium text-slate-700">{selectedLanguage.name}</span> • Mode:{' '}
-              <span className={`font-medium ${isDetectable ? 'text-slate-700' : 'text-emerald-600'}`}>
-                {isDetectable ? 'Detectable' : 'Undetectable (Private)'}
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-slate-500">
+                Language: <span className="font-medium text-slate-700">{selectedLanguage.name}</span>
               </span>
-            </p>
+              <span className="text-slate-300">•</span>
+              <button
+                type="button"
+                onClick={() => setIsDetectable(!isDetectable)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+                  !isDetectable
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                    : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                }`}
+                title="Toggle Detectable vs Undetectable Mode"
+              >
+                {!isDetectable ? (
+                  <>
+                    <EyeOff className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Mode: Undetectable (Private)</span>
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Mode: Detectable</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -206,6 +230,44 @@ export const HomePage: React.FC = () => {
           </span>
         </div>
       </div>
+
+      {/* Undetectable Mode Guidance & Limitation Box */}
+      {!isDetectable && (
+        <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200/90 text-xs text-emerald-950 space-y-2 animate-in fade-in duration-200 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 font-semibold text-emerald-900">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+              <span>Undetectable Mode Active — Screen Sharing Guidance</span>
+            </div>
+            <span className="text-[10px] font-medium bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
+              Private Sharing Supported
+            </span>
+          </div>
+          <p className="text-slate-600 text-[11.5px] leading-relaxed">
+            The assistant opens in a separate OS-level desktop window visible to you. To ensure meeting participants cannot see the assistant while you share your screen, follow this supported sharing rule:
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1 text-[11px]">
+            <div className="p-2.5 rounded-xl bg-white border border-emerald-200 flex items-start gap-2 shadow-xs">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold text-slate-900">Supported Sharing (Invisible to Participants):</span>
+                <p className="text-slate-600 mt-0.5">
+                  When starting screen share in Zoom, Meet, or Teams, choose <strong>Browser Tab</strong> or <strong>Application Window</strong> (e.g. VS Code, Word, slides). The assistant window remains outside that capture boundary.
+                </p>
+              </div>
+            </div>
+            <div className="p-2.5 rounded-xl bg-amber-50/80 border border-amber-200/80 flex items-start gap-2 shadow-xs">
+              <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold text-amber-900">Entire Screen Limitation (Visible to Participants):</span>
+                <p className="text-amber-800 mt-0.5">
+                  Selecting <strong>Entire Screen</strong> captures your whole desktop including the floating assistant. Never select Entire Screen if you want the assistant to remain private.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Section: Start or Join a Live Meeting */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-sm">

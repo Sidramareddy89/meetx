@@ -24,7 +24,10 @@ import {
   Check,
   Languages,
   Volume2,
-  VolumeX
+  VolumeX,
+  CheckCircle2,
+  AlertCircle,
+  ShieldCheck
 } from 'lucide-react';
 import { useMeeting } from '../../contexts/MeetingContext';
 import { useSpeechToText } from '../../hooks/useSpeechToText';
@@ -563,6 +566,17 @@ export const FloatingAssistantWidget: React.FC = () => {
           </button>
         )}
 
+        {/* Undetectable mode indicator pill */}
+        {!isDetectable && (
+          <span
+            title="Undetectable Mode Active: Share a specific Browser Tab or Window in your meeting to keep this assistant private. (Entire Screen captures everything)."
+            className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] text-emerald-400 font-medium cursor-help"
+          >
+            <EyeOff className="w-3 h-3 text-emerald-400" />
+            <span className="hidden sm:inline">Undetectable</span>
+          </span>
+        )}
+
         <button
           onClick={stopMeetingSession}
           title="Stop session (Ctrl+Shift+\)"
@@ -856,6 +870,21 @@ export const FloatingAssistantWidget: React.FC = () => {
                             <div className={`w-3 h-3 bg-white rounded-full transition-transform ${!isDetectable ? 'ml-auto' : ''}`} />
                           </div>
                         </div>
+
+                        {!isDetectable && (
+                          <div className="p-2 rounded-xl bg-emerald-950/50 border border-emerald-500/30 text-[10px] text-emerald-300 space-y-1 animate-in fade-in duration-150">
+                            <div className="flex items-center gap-1 font-semibold text-emerald-400">
+                              <ShieldCheck className="w-3 h-3 flex-shrink-0" />
+                              <span>Private Sharing Guide</span>
+                            </div>
+                            <p className="text-slate-300 text-[9.5px] leading-relaxed">
+                              ✅ <strong>Supported:</strong> In your meeting app (Zoom/Meet/Teams), share a specific <strong>Browser Tab</strong> or <strong>Application Window</strong>. This assistant remains outside that capture.
+                            </p>
+                            <p className="text-amber-300/90 text-[9.5px] leading-relaxed">
+                              ⚠️ <strong>Limitation:</strong> Do not select <strong>Entire Screen</strong>, which captures all desktop pixels.
+                            </p>
+                          </div>
+                        )}
 
                         <div className="flex items-center justify-between cursor-pointer" onClick={() => setHideMeetxHidesWidget(!hideMeetxHidesWidget)}>
                           <span className="flex items-center gap-1.5 text-slate-300">
