@@ -295,18 +295,17 @@ export const buildPrompt = (
     `User Notes: "${notes}"` +
     `${kbBlock}Meeting conversation so far (real, live, chronological; older relevant remarks are included - use the whole thing, not only the last line):\n${transcriptSnippet || '(no speech captured yet — microphone off, not permitted, or silent)'}\n\n` +
     (latestLineNo ? `The participant just spoke remark #${latestLineNo} - answer THAT remark, using the rest of the conversation as context.\n\n` : '') +
-    `Rules - REPLY FAST AND CONCISE. Answer in TEXT ONLY, in exactly this shape:` +
-    `\n1) the answer itself - one or two short lines, at most 25 words (or up to 3 short bullets). ` +
+    `Rules - Answer in TEXT ONLY. Tailor the response depth to the question type:` +
+    `\n- For simple factual questions or quick action queries: give a direct, clear response.` +
     (actionType === 'say'
-      ? `The user is asking WHAT TO SAY, so start the answer with "Say: ...".`
-      : `The user is asking a question, so answer it directly and do NOT start with "Say:".`) +
-    `\n2) then a single line starting with "Context:" that gives the short reason in a few ` +
-    `words (you may add the remark number in brackets). ` +
+      ? `\n- The user is asking WHAT TO SAY, so start the answer with "Say: ...".`
+      : `\n- The user is asking a question, so answer it directly and do NOT start with "Say:".`) +
+    `\n- For explanation, conceptual, technical, "how", "why", "explain", or "difference" questions: provide a comprehensive, well-structured response (include Definition, How it works / Key steps, Why it matters, and a brief Example or meeting context if applicable). Do NOT artificially truncate explanations.` +
+    `\n- If grounded in meeting remarks, add a brief line at the end starting with "Context:" indicating the relevant remark/context.` +
     `\nStop there. No preamble, no filler, no disclaimers, no repetition, no offer to ` +
     `elaborate, and never mention audio, voice, speaking aloud or reading aloud - the ` +
     `answer is read on screen.` +
-    `\nUse the whole conversation above for context, and answer the most recent remark. ` +
-    `${groundingRule}\n\n` +
+    `\n${groundingRule}\n\n` +
     `User Question: ${prompt}`
   );
 };
@@ -400,7 +399,7 @@ export async function callGemini(
           signal: controller.signal,
           body: JSON.stringify({
             contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-            generationConfig: { maxOutputTokens: 512, temperature: 0.3 },
+            generationConfig: { maxOutputTokens: 1024, temperature: 0.3 },
           }),
         }
       );
@@ -492,7 +491,7 @@ export async function callGroq(
             {
               role: 'system',
               content:
-                'You are MEETX, a real-time multilingual AI meeting copilot. TEXT ONLY: never produce audio, never suggest speaking or reading aloud. Answer in exactly two parts - (1) the answer, one or two short lines, at most 25 words or up to 3 short bullets, starting with "Say: ..." when asked what to say; (2) a single "Context:" line naming the remark it is based on. Then stop. No preamble, filler or disclaimers. Ground answers in the transcript when one has been captured; when none has, still answer from the topic and notes and say how to enable the mic. Never reply that you were given no transcript.',
+                'You are MEETX, an elite real-time multilingual AI meeting copilot. TEXT ONLY: never produce audio, never suggest speaking or reading aloud. Match response depth to the question: keep simple factual or "what to say" queries clear and direct; for explanation, technical, "how", "why", or multi-step questions, provide a thorough, structured response (Definition, How it works, Key points/steps, Why it matters, Examples/Context). Include a brief "Context:" line when referencing meeting remarks. Never reply that you were given no transcript.',
             },
             { role: 'user', content: fullPrompt },
           ],

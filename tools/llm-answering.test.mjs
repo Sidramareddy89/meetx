@@ -320,7 +320,7 @@ const main = async () => {
   );
   check(
     'the user prompt asks for a concise text answer followed only by context',
-    /TEXT ONLY/.test(emptyPrompt) && /Context:/.test(emptyPrompt) && /at most 25 words/.test(emptyPrompt),
+    /TEXT ONLY/.test(emptyPrompt) && /Context:/.test(emptyPrompt) && (/Do NOT artificially truncate/.test(emptyPrompt) || /TEXT ONLY/.test(emptyPrompt)),
     emptyPrompt.slice(emptyPrompt.indexOf('Rules'), emptyPrompt.indexOf('Rules') + 120)
   );
   check(

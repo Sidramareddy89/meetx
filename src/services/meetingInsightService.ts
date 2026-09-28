@@ -318,31 +318,26 @@ export function buildLiveBrief(
   const actions: ConversationActionItem[] = [];
   const deadlines: ConversationDeadline[] = [];
   
-  // Process all entries, prioritizing newest ones if there are too many, but let's just collect all reasonable ones.
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i];
+  // Process entries chronologically so actions and deadlines mirror conversation order.
+  for (const e of entries) {
     if (!ACTION_VERBS.test(e.text)) continue;
     const text = e.text.trim().slice(0, 220);
     const due = extractDueDate(e.text);
     const assignee = extractAssignee(e.text);
-    
-    // Determine if it's explicitly a deadline statement vs a general action
     const isDeadline = /\b(deadline|due by|by (monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|eod|end of (day|week)))\b/i.test(e.text);
 
-    if (isDeadline || due) {
-      if (deadlines.length < 15) {
-        deadlines.unshift({ id: e.id + '-due', text, date: due });
-      }
-    } else {
-      if (actions.length < 20) {
-        actions.unshift({
-          id: e.id + '-action',
-          text,
-          assignee,
-          dueDate: due,
-          done: false,
-        });
-      }
+    if (actions.length < 20) {
+      actions.push({
+        id: e.id + '-action',
+        text,
+        assignee,
+        dueDate: due,
+        done: false,
+      });
+    }
+
+    if ((isDeadline || due) && deadlines.length < 15) {
+      deadlines.push({ id: e.id + '-due', text, date: due });
     }
   }
 

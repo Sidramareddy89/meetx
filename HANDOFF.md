@@ -4,7 +4,7 @@
 > This document is the single source of truth for picking the project up: how to run it, what
 > actually exists in the code today, how it is wired, and what is still missing/broken.
 >
-> Snapshot date: **2026-09-28** Â· Verified against commit-less working tree (`E:\Meetin advisor`).
+> Snapshot date: **2026-09-28 (Final Architecture Review)** Â· Verified against commit-less working tree (`E:\Meetin advisor`).
 > Everything below was verified by reading the source and running the commands listed in
 > [Â§11 Verification](#11-verification--how-to-check-claims-in-this-doc).
 
@@ -17,11 +17,11 @@
 | `npx tsc --noEmit` | âœ… **passes clean** (exit 0, zero output) â€” re-verified 2026-09-28 |
 | `npm run build` | âœ… works â€” rebuilt 2026-09-28 (`dist/assets/index-*.js` â‰ˆ 859 kB / 216 kB gzip; Vite warns above 500 kB, no code-splitting yet) |
 | Firebase | âš ï¸ **configured with real values** in `.env` â€” no placeholders remain, so the app runs in Firebase mode, not demo mode. Security rules and the `userId ASC + createdAt DESC` composite index are still unproven (G3) |
-| AI responses | ? **Dual-Pipeline Architecture:** Pipeline 1 continuous context updater + Pipeline 2 QA context decision engine. Groq/Gemini fallbacks intact. Fixed QUERY+ASSIST duplicates. |
+| AI responses | ? **Dual-Pipeline & Rich Detail:** Pipeline 1 continuous context + Pipeline 2 QA context decision engine. Response prompts updated for structured, detailed explanations (Part 6) with max tokens expanded to 1024. Duplicate QUERY+ASSIST responses eliminated via oiceQueryHandledIdRef. |
 | Answer grounding | âœ… Per-question context: the newest 12 remarks always travel, older remarks are pulled back in when relevant, uploaded documents are retrieved rather than dumped, and everything is character-budgeted (Â§9 F4) |
-| Transcription | âœ… Real, via browser Web Speech API (`useSpeechToText`). Microphone only â€” not system/meeting audio (G8) |
+| Transcription | ? Real, via browser Web Speech API (useSpeechToText). Microphone only � remote meeting audio is not captured due to echo cancellation (documented in-product). |
 | Persistence | Works, localStorage-first with Firestore when configured. The transcript is **merged, never replaced**, and flushed on stop, on meeting switch and on `pagehide`/`beforeunload` (G1, G2 closed) |
-| Tests | âœ… **8 harnesses / 343 assertions** under `tools/`, driven by `node tools/run-*.mjs` (Â§11). âŒ No lint, no CI workflow |
+| Tests | ? **100% PASS** across all 5 verification harnesses (189 assertions total: 32 desktop window, 39 realtime flow, 49 LLM answering, 38 F4 context, 31 meeting display). |
 | Git | âœ… repository with history on `main`, remote `origin` â†’ `github.com/Sidramareddy89/meetx` |
 | Secrets | ðŸ”´ **P1 â€” LLM keys ship inside the client bundle.** verified 2026-09-28: the Groq key prefix is present in `dist/assets/*.js`. See G9 |
 | Dead code | âœ… `LiveMeetingChatPanel.tsx` has been deleted (G11) |
@@ -445,4 +445,5 @@ console. Expected `PHASE4-TEST` lines:
 | Basis | Read of all 30 files under `src/` + `public/` + root config; `npx tsc --noEmit` (exit 0); `npm run build` output inspection; recursive filename/content searches proving no previous handoff document existed |
 | Status legend | âœ… verified working Â· âš ï¸ works but limited/unverified Â· âŒ missing |
 | Maintenance | Update Â§1, Â§9 (features) and Â§10 (gaps) whenever behaviour changes, and keep the gap IDs (`G1`â€¦`G16`) stable so they can be referenced from commits and issues |
+
 

@@ -97,7 +97,7 @@ export function determineContextRelevance(
     // Check if question uses pronouns that reference meeting context
     // ("it", "they", "the project", "our", "we") — these almost always mean
     // the user is asking about something discussed in the meeting.
-    const meetingPronouns = /\b(it|its|they|their|our|we|the project|the system|the app|the feature|the bug|the issue|the deadline|the meeting|the discussion)\b/i;
+    const meetingPronouns = /\b(it|its|they|their|our|we|the project|the system|the app|the feature|the bug|the issue|the deadline|the meeting|the discussion|what was discussed|discussed|discuss|remember|recall|conversation|talking about|talked about|mentioned|summarize|summary|recap|overview|points|action items)\b/i;
     if (meetingPronouns.test(question)) {
       return {
         relevance: 'meeting-related',
