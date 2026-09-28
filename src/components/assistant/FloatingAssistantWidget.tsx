@@ -27,6 +27,8 @@ import {
   VolumeX,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
+  Monitor,
   ShieldCheck
 } from 'lucide-react';
 import { useMeeting } from '../../contexts/MeetingContext';
@@ -177,6 +179,10 @@ export const FloatingAssistantWidget: React.FC = () => {
     hideMeetxHidesWidget,
     setHideMeetxHidesWidget,
     setIsPlatformClosed,
+    screenShareSurface,
+    setScreenShareSurface,
+    startScreenShareVerification,
+    stopScreenShareVerification,
     setIsPlanModalOpen,
     freeMeetingsLeft,
     isProUser,
