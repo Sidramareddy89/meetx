@@ -4,10 +4,10 @@ use tauri::Manager;
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum ProtectionStatus {
-    Active,
+    Protected,
     NotRequested,
-    Requested,
     Unsupported,
+    NotAvailable,
     Unknown,
 }
 
@@ -24,8 +24,8 @@ fn set_assistant_content_protection(
 ) -> Result<ProtectionResult, String> {
     let Some(window) = app.get_webview_window("assistant") else {
         return Ok(ProtectionResult {
-            status: ProtectionStatus::Unknown,
-            detail: "The native assistant window is not available.".into(),
+            status: ProtectionStatus::NotAvailable,
+            detail: "The native assistant window is unavailable, so no window protection state can be applied.".into(),
         });
     };
 
@@ -55,20 +55,22 @@ fn set_assistant_content_protection(
         let read_result = unsafe {
             windows::Win32::UI::WindowsAndMessaging::GetWindowDisplayAffinity(hwnd, &mut affinity)
         };
-        if read_result.is_ok() && affinity == 0x11 {
+        if read_result.is_ok()
+            && affinity == windows::Win32::UI::WindowsAndMessaging::WDA_EXCLUDEFROMCAPTURE.0
+        {
             return Ok(ProtectionResult {
-        status: ProtectionStatus::Active,
-        detail: "Windows reports WDA_EXCLUDEFROMCAPTURE for the assistant window. This applies only to supported Windows capture paths and is not a recording-proof guarantee.".into(),
-      });
+                status: ProtectionStatus::Protected,
+            detail: "Windows reports WDA_EXCLUDEFROMCAPTURE for the assistant window. Microsoft documents this for a specific set of public OS capture APIs when DWM composes the desktop; it is not a security boundary or recording-proof guarantee.".into(),
+            });
         }
         return Ok(ProtectionResult {
             status: if read_result.is_err() {
-                ProtectionStatus::Requested
+                ProtectionStatus::Unknown
             } else {
                 ProtectionStatus::Unsupported
             },
             detail: if read_result.is_err() {
-                "Windows accepted the request, but MEETX could not verify the window display-affinity state.".into()
+                "Windows accepted the request, but MEETX could not verify the window display-affinity state; protection is unknown.".into()
             } else {
                 "Windows did not report WDA_EXCLUDEFROMCAPTURE as active for this window.".into()
             },
@@ -79,8 +81,8 @@ fn set_assistant_content_protection(
     {
         let _ = window;
         Ok(ProtectionResult {
-      status: ProtectionStatus::Unsupported,
-      detail: "OS content protection is unavailable/not guaranteed on macOS. The AppKit sharing flag used by Tauri is legacy and newer ScreenCaptureKit capture paths may still include the window.".into(),
+            status: ProtectionStatus::NotAvailable,
+            detail: "Tauri's window-content-protection request is not available as a reliable macOS capture-exclusion guarantee. ScreenCaptureKit capture apps can define their own content filters; MEETX cannot control filters used by other apps.".into(),
     })
     }
 
@@ -88,7 +90,7 @@ fn set_assistant_content_protection(
     {
         let _ = window;
         Ok(ProtectionResult {
-            status: ProtectionStatus::Unsupported,
+            status: ProtectionStatus::NotAvailable,
             detail: "OS content protection is unavailable on this platform.".into(),
         })
     }

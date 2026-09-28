@@ -639,8 +639,8 @@ export const FloatingAssistantWidget: React.FC = () => {
       )}
 
       {!isDetectable && isNativeAssistant && contentProtection && (
-        <div role="status" className={`mt-1 rounded-lg px-3 py-1.5 text-[10px] ${contentProtection.status === 'active' ? 'bg-emerald-950/80 text-emerald-200' : 'bg-amber-950/80 text-amber-200'}`}>
-          <strong>OS content protection: {contentProtection.status === 'active' ? 'reported active' : contentProtection.status === 'requested' ? 'requested; status unverified' : contentProtection.status === 'unsupported' ? 'unavailable / not guaranteed' : contentProtection.status === 'unknown' ? 'status unknown' : 'not requested'}.</strong> {contentProtection.detail}
+        <div role="status" className={`mt-1 rounded-lg px-3 py-1.5 text-[10px] ${contentProtection.status === 'protected' ? 'bg-emerald-950/80 text-emerald-200' : 'bg-amber-950/80 text-amber-200'}`}>
+          <strong>OS content protection: {contentProtection.status === 'protected' ? 'Protected' : contentProtection.status === 'unsupported' ? 'Unsupported' : contentProtection.status === 'not-available' ? 'Not Available' : contentProtection.status === 'unknown' ? 'Unknown' : 'Not requested'}.</strong> {contentProtection.detail}
         </div>
       )}
 

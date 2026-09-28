@@ -4,7 +4,7 @@ import { MeetingTranscriptEntry, SUPPORTED_LANGUAGES, SupportedLanguage } from '
 import { MeetingContext, MeetingContextType } from '../contexts/MeetingContext';
 
 export type ProtectionStatus = {
-  status: 'not-requested' | 'requested' | 'active' | 'unsupported' | 'unknown';
+  status: 'not-requested' | 'protected' | 'unsupported' | 'not-available' | 'unknown';
   detail: string;
 };
 

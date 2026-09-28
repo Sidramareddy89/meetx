@@ -36,12 +36,12 @@ const checks = [
   ['transcript and LLM actions route back to owner', host.includes("case 'addTranscriptEntry'") && host.includes('owner.askAssistant(query, action, options)')],
   ['stopping meeting closes native assistant', host.includes('closeNativeAssistantWindow()') && host.includes("case 'stopMeetingSession'")],
   ['Private Mode reads the existing isDetectable source of truth', host.includes('meeting.isDetectable') && bridge.includes("'isDetectable'")],
-  ['Windows request is checked through GetWindowDisplayAffinity', rust.includes('GetWindowDisplayAffinity') && rust.includes('affinity == 0x11')],
-  ['macOS is reported as unsupported/not guaranteed', rust.includes('#[cfg(target_os = "macos")]') && rust.includes('ProtectionStatus::Unsupported') && rust.includes('unavailable/not guaranteed on macOS')],
+  ['Windows request is checked through GetWindowDisplayAffinity and the documented WDA_EXCLUDEFROMCAPTURE constant', rust.includes('GetWindowDisplayAffinity') && rust.includes('WDA_EXCLUDEFROMCAPTURE')],
+  ['macOS is reported as Not Available without universal capture guarantees', rust.includes('#[cfg(target_os = "macos")]') && rust.includes('ProtectionStatus::NotAvailable') && rust.includes('reliable macOS capture-exclusion guarantee')],
   ['web mode retains Document Picture-in-Picture', browserWindow.includes('controller.requestWindow') && browserWindow.includes('!isTauri()')],
   ['web mode stays outside Tauri branch in app routing', app.includes('return (\n    <BrowserRouter>') && browserWindow.includes('documentPictureInPicture')],
   ['desktop session owner remains usable while assistant hidden', layout.includes('Show assistant') && layout.includes('End meeting')],
-  ['content protection status distinguishes requested, active, unsupported and unknown', bridge.includes("'requested' | 'active' | 'unsupported' | 'unknown'")],
+  ['content protection status distinguishes Protected, Unsupported, Not Available and Unknown', bridge.includes("'protected' | 'unsupported' | 'not-available' | 'unknown'")],
   ['only default and narrow create/content-protection permissions are granted', capabilities.windows.includes('assistant') && capabilities.permissions.includes('core:webview:allow-create-webview-window') && capabilities.permissions.includes('core:window:allow-set-content-protected')],
 ];
 
