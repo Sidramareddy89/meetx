@@ -29,7 +29,7 @@ export interface AssistantMessage {
 
 export type AnswerCardSize = 'compact' | 'normal' | 'expanded';
 
-interface MeetingContextType {
+export interface MeetingContextType {
   isDetectable: boolean;
   setIsDetectable: (val: boolean) => void;
   selectedLanguage: SupportedLanguage;

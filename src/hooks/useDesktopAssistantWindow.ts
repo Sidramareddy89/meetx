@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 
 /**
  * MEETX — dedicated desktop floating-window lifecycle.
@@ -103,7 +104,7 @@ export const useDesktopAssistantWindow = (): DesktopAssistantWindowState => {
   const unmountTimerRef = useRef<number | null>(null);
 
   const isSupported =
-    typeof window !== 'undefined' && 'documentPictureInPicture' in window;
+    !isTauri() && typeof window !== 'undefined' && 'documentPictureInPicture' in window;
 
   const clearWindow = useCallback((win: Window) => {
     if (pipWindowRef.current !== win) return;

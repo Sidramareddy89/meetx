@@ -86,7 +86,7 @@ export const NavLink = ({ children }) => children;
 
 // Inert icons used by the widget and its panes.
 const ICONS = [
-  'AlertTriangle', 'ArrowRight', 'Bell', 'CalendarClock', 'Check', 'ChevronDown', 'ChevronUp', 'Clock',
+  'AlertTriangle', 'ArrowRight', 'Bell', 'X', 'CalendarClock', 'Check', 'ChevronDown', 'ChevronUp', 'Clock',
   'Copy', 'CreditCard', 'Eye', 'EyeOff', 'FileText', 'Languages', 'Layers', 'Lightbulb',
   'ListChecks', 'Loader2', 'Maximize2', 'MessageSquare', 'Mic', 'Minimize2', 'MoreHorizontal',
   'Paperclip', 'PictureInPicture', 'Play', 'Plus', 'RotateCcw', 'Send', 'ShieldCheck', 'Sparkles', 'Square',

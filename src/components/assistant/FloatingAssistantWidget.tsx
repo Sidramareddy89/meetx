@@ -29,9 +29,12 @@ import {
   AlertCircle,
   AlertTriangle,
   Monitor,
-  ShieldCheck
+  ShieldCheck,
+  X
 } from 'lucide-react';
-import { useMeeting } from '../../contexts/MeetingContext';
+import { useAssistantMeeting } from '../../desktop/assistantBridge';
+import { hideNativeAssistantWindow, isNativeAssistantWindow } from '../../desktop/nativeAssistantWindow';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useSpeechToText } from '../../hooks/useSpeechToText';
 import { useDesktopAssistantWindow } from '../../hooks/useDesktopAssistantWindow';
 import { SUPPORTED_LANGUAGES } from '../../types/meeting';
@@ -189,8 +192,10 @@ export const FloatingAssistantWidget: React.FC = () => {
     askAssistant,
     addTranscriptEntry,
     isThinking,
-  } = useMeeting();
+    contentProtection,
+  } = useAssistantMeeting();
   const entireScreenWarning = !isDetectable && isEntireScreenShareReported;
+  const isNativeAssistant = isNativeAssistantWindow();
 
   useEffect(() => {
     if (isDetectable && isEntireScreenShareReported) {
@@ -426,6 +431,10 @@ export const FloatingAssistantWidget: React.FC = () => {
   // Draggable logic
   const handleMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('.drag-handle')) {
+      if (isNativeAssistant) {
+        void getCurrentWebviewWindow().startDragging();
+        return;
+      }
       setIsDragging(true);
       setDragOffset({
         x: e.clientX - position.x,
@@ -516,7 +525,9 @@ export const FloatingAssistantWidget: React.FC = () => {
   const widgetNode = (
     <div
       ref={widgetRef}
-      style={{ left: `${position.x}px`, top: `${position.y}px` }}
+      style={isNativeAssistant
+        ? { left: 0, top: 0, width: '100%', position: 'relative' }
+        : { left: `${position.x}px`, top: `${position.y}px` }}
       onMouseDown={handleMouseDown}
       className="fixed z-[9999] flex flex-col items-center select-none font-sans"
     >
@@ -577,6 +588,12 @@ export const FloatingAssistantWidget: React.FC = () => {
           </button>
         )}
 
+        {isNativeAssistant && (
+          <button type="button" onClick={() => void hideNativeAssistantWindow()} title="Hide assistant window; meeting continues" aria-label="Hide assistant window" className="h-6 w-6 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700/50">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+
         {/* Private mode indicator pill */}
         {!isDetectable && (
           <span
@@ -618,6 +635,12 @@ export const FloatingAssistantWidget: React.FC = () => {
               <button type="button" onClick={() => setIsEntireScreenShareReported(true)} className="shrink-0 rounded-lg border border-amber-500/40 px-2 py-1 text-amber-200 hover:bg-amber-500/10">I’m sharing Entire Screen</button>
             </div>
           )}
+        </div>
+      )}
+
+      {!isDetectable && isNativeAssistant && contentProtection && (
+        <div role="status" className={`mt-1 rounded-lg px-3 py-1.5 text-[10px] ${contentProtection.status === 'active' ? 'bg-emerald-950/80 text-emerald-200' : 'bg-amber-950/80 text-amber-200'}`}>
+          <strong>OS content protection: {contentProtection.status === 'active' ? 'reported active' : contentProtection.status === 'requested' ? 'requested; status unverified' : contentProtection.status === 'unsupported' ? 'unavailable / not guaranteed' : contentProtection.status === 'unknown' ? 'status unknown' : 'not requested'}.</strong> {contentProtection.detail}
         </div>
       )}
 
