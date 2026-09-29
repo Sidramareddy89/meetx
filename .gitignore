@@ -12,8 +12,9 @@ dist/
 # stray typecheck artifact (use `npx tsc --noEmit` instead)
 tsc_check.txt
 
-# dev / tunnel logs
+# dev / preview / tunnel logs (redirects from npm run dev, npm run preview, ngrok)
 *.log
+*.err
 build.out.log
 build.err.log
 
