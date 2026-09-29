@@ -13,6 +13,9 @@ import { useAuth } from './AuthContext';
  */
 export const MAX_FREE_MEETINGS = 10;
 
+let assistantMessageSequence = 0;
+const createAssistantMessageId = (): string => `${Date.now()}-${++assistantMessageSequence}`;
+
 const FREE_MEETINGS_LEFT_KEY = 'meetx_free_meetings_left';
 /** Records which allowance the stored counter belongs to, so a limit change
  *  is detected and the counter is reset rather than resumed at an old value. */
@@ -337,15 +340,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const addAssistantMessage = (msg: AssistantMessage) => {
-    setAssistantMessages((prev) => {
-      // Never repeat an answer: an auto-answer for a repeated remark, or a
-      // retriggered action, must not stack the same text in the card.
-      const last = prev[prev.length - 1];
-      if (last && last.sender === msg.sender && last.text.trim() === msg.text.trim()) {
-        return prev;
-      }
-      return [...prev, msg];
-    });
+    setAssistantMessages((prev) => [...prev, msg]);
   };
 
   const clearAssistantMessages = () => {
@@ -505,7 +500,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (actionType === 'query') {
       addAssistantMessage({
-        id: Date.now().toString(),
+        id: createAssistantMessageId(),
         sender: 'user',
         text: queryOrAction,
         time: timeStr,
@@ -532,7 +527,7 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       });
 
       addAssistantMessage({
-        id: (Date.now() + 1).toString(),
+        id: createAssistantMessageId(),
         sender: 'assistant',
         actionType,
         text: response.text,

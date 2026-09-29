@@ -13,6 +13,7 @@ import {
   browserLocalPersistence
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { useNavigate } from 'react-router-dom';
 import { auth, db, isFirebaseConfigured } from '../config/firebase';
 import { UserProfile } from '../types/user';
 
@@ -51,6 +52,7 @@ const saveUserProfileBestEffort = (uid: string, data: Record<string, unknown>): 
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
 
   // Merge a raw Firebase Auth user with the stored Firestore profile document.
@@ -96,26 +98,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const applyAuthenticatedUser = async (user: User): Promise<void> => {
+    const profile = await loadUserProfileDoc(user);
+    setCurrentUser(profile);
+    setIsRegisteredUser(true);
+  };
+
   useEffect(() => {
-    // Set local persistence for Firebase auth
-    setPersistence(auth, browserLocalPersistence).catch((err) => {
-      console.warn('Firebase persistence warning:', err);
-    });
+    let cancelled = false;
+    let unsubscribeAuth: (() => void) | undefined;
 
-    const unsubscribe = onAuthStateChanged(auth, async (user: User | null) => {
-      if (user) {
-        // Start from the Auth record, then overlay the Firestore profile
-        // (display name / phone number / onboarding state) when available.
-        const profile = await loadUserProfileDoc(user);
-        setCurrentUser(profile);
-        setIsRegisteredUser(true);
-      } else {
-        setCurrentUser(null);
+    const initializeAuth = async () => {
+      try {
+        await setPersistence(auth, browserLocalPersistence);
+      } catch (err) {
+        console.warn('Firebase auth initialization warning:', err);
       }
-      setLoading(false);
-    });
+      if (cancelled) return;
 
-    return () => unsubscribe();
+      unsubscribeAuth = onAuthStateChanged(auth, async (user: User | null) => {
+        if (user) {
+          await applyAuthenticatedUser(user);
+        } else {
+          setCurrentUser(null);
+          setIsRegisteredUser(false);
+        }
+        setLoading(false);
+      });
+    };
+
+    void initializeAuth();
+    return () => {
+      cancelled = true;
+      unsubscribeAuth?.();
+    };
   }, []);
 
   const register = async (email: string, password: string, displayName: string) => {

@@ -95,6 +95,20 @@ export const getDocs = async (q) => {
   return { forEach: (cb) => list.forEach(cb), docs: () => list };
 };
 
+export const onSnapshot = (target, next) => {
+  if (target.path && target.path.startsWith('meetings/')) {
+    const found = store().get(target.path);
+    next({ exists: () => Boolean(found), data: () => (found ? clone(found) : undefined) });
+  } else {
+    const prefix = target.path + '/';
+    const docs = [...store().entries()]
+      .filter(([path]) => path.startsWith(prefix))
+      .map(([path, data]) => ({ id: path.split('/').pop(), data: () => clone(data) }));
+    next({ forEach: (cb) => docs.forEach(cb), docs: () => docs });
+  }
+  return () => {};
+};
+
 export const deleteDoc = async (ref) => {
   calls().push({ fn: 'deleteDoc', path: ref.path });
   store().delete(ref.path);

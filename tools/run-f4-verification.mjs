@@ -48,6 +48,7 @@ export const serverTimestamp = () => '__serverTimestamp__';
 export const setDoc = async () => {};
 export const getDoc = async () => ({ exists: () => false, data: () => undefined });
 export const getDocs = async () => ({ forEach: () => {} });
+export const onSnapshot = () => () => {};
 export const deleteDoc = async () => {};
 export const ref = (_storage, path) => ({ path });
 export const uploadBytes = async (target) => ({ ref: target });

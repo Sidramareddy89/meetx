@@ -1,18 +1,18 @@
 /**
- * MEETX — desktop floating-window lifecycle verification (Document PiP).
+ * MEETX — floating-window lifecycle verification (Document PiP).
  *
  * Mounts the REAL `FloatingAssistantWidget` against the REAL `MeetingProvider`
  * with a fake Document Picture-in-Picture controller and verifies the window
  * lifecycle required of a system-level always-on-top assistant:
  *
- *   TEST 1  meeting starts            → the desktop window opens (520×700),
+ *   TEST 1  meeting starts            → the floating window opens (520×700),
  *                                       the widget renders into it via portal
  *   TEST 6  the window is closed      → the meeting keeps running untouched
  *   TEST 7  conversation continues    → transcript + assistant processing
  *                                       while the window is hidden
  *   TEST 8  the window is restored    → same active meeting, same state,
  *                                       rendered into a NEW window
- *   TEST 9  meeting stops             → the desktop window closes/cleans up
+ *   TEST 9  meeting stops             → the floating window closes/cleans up
  *   TEST 10 a new meeting             → gets its own fresh window
  *
  * TEST 2–5 (visual persistence across tab/app switches, moving the window)
@@ -24,7 +24,7 @@
  * `react-router-dom`, `lucide-react`, `./AuthContext`, the Firebase surface —
  * everything else (widget, MeetingContext, services, speech hook) is REAL.
  *
- * Run:  node tools/run-desktop-assistant-window.mjs
+ * Run:  node tools/run-floating-window-lifecycle.mjs
  * Exit code 0 = all lifecycle assertions passed.
  */
 
@@ -251,8 +251,8 @@ const findNode = (node, predicate, depth = 0) => {
 };
 
 const text = () => collectText(widgetTree).join(' ');
-const desktopToggle = () =>
-  findNode(widgetTree, (n) => typeof n.props?.title === 'string' && n.props.title.includes('desktop floating window'));
+const floatingToggle = () =>
+  findNode(widgetTree, (n) => typeof n.props?.title === 'string' && n.props.title.includes('floating window'));
 const portalContainer = () => globalThis.__meetxPortalContainer ?? null;
 const resetPortalCapture = () => { globalThis.__meetxPortalContainer = null; };
 
@@ -266,30 +266,30 @@ const entry = (id, body, seconds = 0) => ({
 });
 
 const main = async () => {
-  console.log('=== MEETX desktop floating-window lifecycle verification ===\n');
+  console.log('=== MEETX floating-window lifecycle verification ===\n');
 
   renderAll();
-  check('precondition: no desktop window before a meeting', pip.requests.length === 0 && portalContainer() === null);
+  check('precondition: no floating window before a meeting', pip.requests.length === 0 && portalContainer() === null);
 
   // ---------------------------------------------------------- TEST 1 (start)
   const started = meetingValue.startMeetingSession({
     meetingId: 'meet-pip-lifecycle',
     userId: UID,
-    topic: 'Desktop floating window lifecycle',
+    topic: 'Floating window lifecycle',
   });
   check('TEST 1: the session started', started === true, `started=${started}`);
   renderAll();                                  // rising-edge effect fires
   await tick();                                 // requestWindow resolves
   renderAll();                                  // widget renders with a portal target
 
-  check('TEST 1: the desktop window was requested', pip.requests.length === 1, `requests=${pip.requests.length}`);
+  check('TEST 1: the floating window was requested', pip.requests.length === 1, `requests=${pip.requests.length}`);
   check('TEST 1: requested at 520×700', pip.requests[0]?.width === 520 && pip.requests[0]?.height === 700, JSON.stringify(pip.requests[0]));
   const firstWindow = pip.windows[0];
   check('TEST 1: the controller holds the open window', pipController.window === firstWindow);
-  check('TEST 1: the widget rendered INTO the desktop window', portalContainer() === firstWindow.document.body.children[0], 'portal target mismatch');
+  check('TEST 1: the widget rendered INTO the floating window', portalContainer() === firstWindow.document.body.children[0], 'portal target mismatch');
   check('TEST 1: the window body is styled dark', firstWindow.document.body.style.background === '#151822', firstWindow.document.body.style.background);
   check('TEST 1: the active session is shown', text().includes('MEETX is now active'), text().slice(0, 120));
-  check('TEST 1: a desktop-window close toggle exists in the window', desktopToggle()?.props?.title?.includes('Close desktop floating window') === true);
+  check('TEST 1: a floating-window close toggle exists in the window', floatingToggle()?.props?.title?.includes('Close floating window') === true);
 
   // ------------------------------------------ privacy/capture-boundary flow
   check('PRIVACY: private mode never claims the widget is undetectable', !text().includes('Undetectable'));
@@ -325,7 +325,7 @@ const main = async () => {
   check('TEST 6: no programmatic close was counted (the user closed it)', pip.closes === 0, `closes=${pip.closes}`);
   check('TEST 6: the widget fell back to the in-page render', portalContainer() === null);
   check('TEST 6: no automatic reopen happened', pip.requests.length === 1, `requests=${pip.requests.length}`);
-  check('TEST 6: a restore toggle is available in-page', desktopToggle()?.props?.title?.includes('Open desktop floating window') === true);
+  check('TEST 6: a restore toggle is available in-page', floatingToggle()?.props?.title?.includes('Open floating window') === true);
   check('PRIVACY: closing floating assistant preserves active Entire Screen warning state', meetingValue.isEntireScreenShareReported === false && meetingValue.isFloatingActive);
 
   // ------------------------------------- TEST 7 (conversation continues hidden)
@@ -338,18 +338,18 @@ const main = async () => {
   check('TEST 7: the transcript continued while the window was hidden', meetingValue.currentMeetingTranscript.length === 1 && text().includes('keeps listening while hidden'), `len=${meetingValue.currentMeetingTranscript.length}`);
   check('TEST 7: AI processing continued (an auto answer was produced)', meetingValue.assistantMessages.length >= 2, `messages=${meetingValue.assistantMessages.length}`);
   check('TEST 7: the meeting was never stopped', meetingValue.isFloatingActive === true);
-  check('TEST 7: still no desktop window while hidden', portalContainer() === null && pip.requests.length === 1);
+  check('TEST 7: still no floating window while hidden', portalContainer() === null && pip.requests.length === 1);
 
 
   // --------------------------------------------- TEST 8 (restore the window)
-  const restoreButton = desktopToggle();
+  const restoreButton = floatingToggle();
   check('TEST 8: the restore button was found in-page', Boolean(restoreButton));
   restoreButton?.props?.onClick();
   await tick(); await tick();
   renderAll();
 
   const secondWindow = pip.windows[1];
-  check('TEST 8: a (new) desktop window was opened', pip.requests.length === 2, `requests=${pip.requests.length}`);
+  check('TEST 8: a (new) floating window was opened', pip.requests.length === 2, `requests=${pip.requests.length}`);
   check('TEST 8: the restore targeted a fresh window', secondWindow !== firstWindow && pipController.window === secondWindow);
   check('TEST 8: the SAME session is rendered into it', portalContainer() === secondWindow.document.body.children[0] && meetingValue.activeMeeting?.id === 'meet-pip-lifecycle');
   check('TEST 8: the transcript captured while hidden is displayed', text().includes('keeps listening while hidden'));
@@ -362,7 +362,7 @@ const main = async () => {
   await tick();
   renderAll();
 
-  check('TEST 9: stopping the meeting closed the desktop window', pip.closes >= 1, `closes=${pip.closes}`);
+  check('TEST 9: stopping the meeting closed the floating window', pip.closes >= 1, `closes=${pip.closes}`);
   check('TEST 9: the controller released the window', pipController.window === null);
   check('TEST 9: the meeting session ended', meetingValue.isFloatingActive === false && meetingValue.activeMeeting === null);
   check('TEST 9: no portal target remains', portalContainer() === null);
@@ -371,7 +371,7 @@ const main = async () => {
   const restarted = meetingValue.startMeetingSession({
     meetingId: 'meet-pip-lifecycle-2',
     userId: UID,
-    topic: 'Second desktop session',
+    topic: 'Second floating session',
   });
   check('TEST 10: a second session started', restarted === true);
   renderAll();
@@ -379,14 +379,14 @@ const main = async () => {
   renderAll();
 
   const thirdWindow = pip.windows[2];
-  check('TEST 10: a fresh desktop window was opened for it', pip.requests.length === 3 && thirdWindow && thirdWindow !== secondWindow, `requests=${pip.requests.length}`);
+  check('TEST 10: a fresh floating window was opened for it', pip.requests.length === 3 && thirdWindow && thirdWindow !== secondWindow, `requests=${pip.requests.length}`);
   check('TEST 10: the new session renders into the new window', portalContainer() === thirdWindow.document.body.children[0]);
-  check('TEST 10: the second meeting owns the window content', text().includes('Second desktop session') || text().includes('MEETX is now active'));
+  check('TEST 10: the second meeting owns the window content', text().includes('Second floating session') || text().includes('MEETX is now active'));
 
   // ------------------------------------------------------------------ report
   console.log(report.join('\n'));
   console.log(`\n${passed} passed, ${failed} failed`);
-  console.log(`RESULT: desktop floating-window lifecycle ${failed === 0 ? 'verified' : 'FAILED'}`);
+  console.log(`RESULT: floating-window lifecycle ${failed === 0 ? 'verified' : 'FAILED'}`);
   console.log(`windows opened: ${pip.requests.length}, programmatic closes: ${pip.closes}`);
   process.exit(failed === 0 ? 0 : 1);
 };

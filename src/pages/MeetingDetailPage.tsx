@@ -25,7 +25,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useMeeting } from '../contexts/MeetingContext';
 import { Meeting, getLanguageDisplayName } from '../types/meeting';
-import { getMeetingById, updateStoredMeeting } from '../services/meetingService';
+import { getMeetingById, subscribeMeeting, updateStoredMeeting } from '../services/meetingService';
 import { buildSummaryFromTranscript, buildShareableMinutes, buildLiveBrief, buildMeetingTranscriptContext, buildMeetingInsights } from '../services/meetingInsightService';
 
 const formatDateTime = (ts?: number): string => {
@@ -84,8 +84,14 @@ export const MeetingDetailPage: React.FC = () => {
       setIsLoading(false);
     }
     fetchMeeting();
+    const unsubscribe = id && currentUser?.uid
+      ? subscribeMeeting(id, currentUser.uid, (found) => {
+          if (!cancelled && found) setMeeting(found);
+        })
+      : () => {};
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [id, currentUser?.uid]);
 
@@ -118,12 +124,19 @@ export const MeetingDetailPage: React.FC = () => {
   const summary = storedSummary || derivedSummary;
   const shareableText = meeting ? buildShareableMinutes(meeting, transcript) : '';
 
-  const brief = meeting ? buildLiveBrief(meeting.topic || meeting.title, transcript) : null;
-  // Deadlines come from the stored record when present, otherwise from the brief.
-  const deadlines: { id: string; text: string; date?: string }[] =
-    brief && brief.deadlines.length
-      ? brief.deadlines
-      : (storedSummary?.deadlines || []).map((text, i) => ({ id: `stored-deadline-${i}`, text }));
+  const brief = sessionIsActiveForThisMeeting && meeting
+    ? buildLiveBrief(meeting.topic || meeting.title, transcript)
+    : null;
+  const actionItems = (sessionIsActiveForThisMeeting ? brief?.actions.map((action) => action.text) : storedSummary?.actions)
+    || summary?.actions || [];
+  const storedDeadlineLines = sessionIsActiveForThisMeeting ? brief?.deadlines.map((d) =>
+    `${d.date ? `[Due: ${d.date}] ` : ''}${d.text}`
+  ) : storedSummary?.deadlines;
+  const deadlines = (storedDeadlineLines || []).map((value, i) => {
+    const parsed = value.match(/^\[Due: ([^\]]+)\]\s*/);
+    return { id: `stored-deadline-${i}`, date: parsed?.[1], text: parsed ? value.slice(parsed[0].length) : value };
+  });
+  const reminders = (sessionIsActiveForThisMeeting ? brief?.reminders : storedSummary?.reminders) || [];
 
   // Backfill: a meeting whose record has no stored insights yet (saved before
   // this existed, or stored offline) gets them derived and written once, so the
@@ -590,43 +603,22 @@ export const MeetingDetailPage: React.FC = () => {
           <div className="flex items-center gap-2 mb-3">
             <ListChecks className="w-4 h-4 text-indigo-500" />
             <h2 className="text-sm font-bold text-slate-900">Actions</h2>
-            {brief?.actions?.length ? (
+            {actionItems.length ? (
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100">
-                {brief.actions.length}
+                {actionItems.length}
               </span>
             ) : null}
           </div>
-          {brief?.actions?.length ? (
+          {actionItems.length ? (
             <ul className="space-y-2">
-              {brief.actions.map((action) => (
-                <li key={action.id} className="flex items-start gap-2 text-xs sm:text-sm text-slate-700">
+              {actionItems.map((action, index) => (
+                <li key={`${meeting?.id}-action-${index}`} className="flex items-start gap-2 text-xs sm:text-sm text-slate-700">
                   <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <Check className="w-2.5 h-2.5" />
                   </span>
                   <span className="leading-relaxed">
-                    {action.text}
-                    {action.assignee || action.dueDate ? (
-                      <span className="ml-1.5 inline-flex gap-1 align-middle">
-                        {action.assignee ? (
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-100">{action.assignee}</span>
-                        ) : null}
-                        {action.dueDate ? (
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 border border-rose-100">{action.dueDate}</span>
-                        ) : null}
-                      </span>
-                    ) : null}
+                    {action}
                   </span>
-                </li>
-              ))}
-            </ul>
-          ) : summary?.actions?.length ? (
-            <ul className="space-y-2">
-              {summary.actions.map((action, i) => (
-                <li key={i} className="flex items-start gap-2 text-xs sm:text-sm text-slate-700">
-                  <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <Check className="w-2.5 h-2.5" />
-                  </span>
-                  <span className="leading-relaxed">{action}</span>
                 </li>
               ))}
             </ul>
@@ -657,9 +649,9 @@ export const MeetingDetailPage: React.FC = () => {
             <Bell className="w-4 h-4 text-amber-500" />
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Reminders</h3>
           </div>
-          {brief?.reminders?.length ? (
+          {reminders.length ? (
             <ul className="space-y-1.5">
-              {brief.reminders.map((r, i) => (
+              {reminders.map((r, i) => (
                 <li key={i} className="flex items-start gap-2 text-xs text-slate-700">
                   <span className="mt-0.5">🔔</span>
                   <span className="leading-relaxed">{r}</span>

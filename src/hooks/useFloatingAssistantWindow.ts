@@ -1,23 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isTauri } from '@tauri-apps/api/core';
-import {
-  hideNativeAssistantWindow,
-  isNativeAssistantWindow,
-  openOrRestoreNativeAssistant,
-} from '../desktop/nativeAssistantWindow';
 
 /**
- * MEETX — dedicated desktop floating-window lifecycle.
+ * MEETX — browser floating-assistant window lifecycle.
  *
- * Browser mode uses Document Picture-in-Picture to put the widget outside
- * the captured tab. Native Tauri mode is handled through the native assistant
- * window bridge, without a DOM portal. The browser path opens the SAME widget
- * in a system-level always-on-top window through the Document Picture-in-Picture
- * API (Chrome/Edge 116+), which is the browser-native equivalent of a Zoom
- * floating meeting window / YouTube PiP window:
- *
- * The lifecycle bullets below describe browser mode; in native mode the main
- * Tauri webview owns session state and this hook only exposes the assistant.
+ * Document Picture-in-Picture puts the widget outside the captured tab: it
+ * opens the SAME widget in a separate always-on-top browser window through the
+ * Document Picture-in-Picture API (Chrome/Edge 116+), the browser-native
+ * equivalent of a Zoom floating meeting window / YouTube PiP window:
  *
  *   meeting starts  → openWindow()  → widget UI portals into the PiP window
  *   user closes it  → `pagehide`    → only THIS local state is cleared —
@@ -41,7 +30,7 @@ import {
 
 const PIP_WIDTH = 520;
 const PIP_HEIGHT = 700;
-const CONTAINER_ID = 'meetx-desktop-assistant-root';
+const CONTAINER_ID = 'meetx-floating-assistant-root';
 
 interface DocumentPictureInPictureController {
   window: Window | null;
@@ -89,21 +78,21 @@ const copyStyleSheets = (targetWindow: Window): void => {
   }
 };
 
-export interface DesktopAssistantWindowState {
-  /** `native`, `document-pip`, or the in-page `inline` fallback. */
-  mode: 'native' | 'document-pip' | 'inline';
+export interface FloatingAssistantWindowState {
+  /** `document-pip`, or the in-page `inline` fallback. */
+  mode: 'document-pip' | 'inline';
   /** Feature detection: false → callers keep the in-page widget. */
   isSupported: boolean;
   isOpen: boolean;
-  /** Browser PiP window or the current Tauri assistant webview. */
+  /** Browser PiP window; null while it is closed or unsupported. */
   window: Window | null;
-  /** Browser PiP portal target; null for native and inline modes. */
+  /** Browser PiP portal target; null in inline mode. */
   container: HTMLElement | null;
   openWindow: () => Promise<Window | null>;
   closeWindow: () => void;
 }
 
-export const useDesktopAssistantWindow = (): DesktopAssistantWindowState => {
+export const useFloatingAssistantWindow = (): FloatingAssistantWindowState => {
   const [pipWindow, setPipWindow] = useState<Window | null>(null);
   // Ref mirror: the async opener and the pagehide handler must see the same
   // window identity as the state without waiting for a re-render.
@@ -113,10 +102,9 @@ export const useDesktopAssistantWindow = (): DesktopAssistantWindowState => {
   const mountedRef = useRef(false);
   const unmountTimerRef = useRef<number | null>(null);
 
-  const isNativeAssistant = isTauri() && isNativeAssistantWindow();
   const isDocumentPiPSupported =
-    !isTauri() && typeof window !== 'undefined' && 'documentPictureInPicture' in window;
-  const isSupported = isNativeAssistant || isDocumentPiPSupported;
+    typeof window !== 'undefined' && 'documentPictureInPicture' in window;
+  const isSupported = isDocumentPiPSupported;
 
   const clearWindow = useCallback((win: Window) => {
     if (pipWindowRef.current !== win) return;
@@ -126,10 +114,6 @@ export const useDesktopAssistantWindow = (): DesktopAssistantWindowState => {
   }, []);
 
   const openWindow = useCallback(async (): Promise<Window | null> => {
-    if (isNativeAssistant) {
-      const assistant = await openOrRestoreNativeAssistant();
-      return assistant && typeof window !== 'undefined' ? window : null;
-    }
     const controller =
       typeof window !== 'undefined' ? window.documentPictureInPicture : undefined;
     if (!controller) return null;
@@ -155,7 +139,7 @@ export const useDesktopAssistantWindow = (): DesktopAssistantWindowState => {
       doc.body.appendChild(container);
       // Closing the window (browser control or Window.close()) clears only
       // THIS local state. Meeting/transcript/AI state lives in MeetingContext
-      // in the opener and is never touched here — closing the desktop window
+      // in the opener and is never touched here — closing the floating window
       // cannot end the meeting.
       win.addEventListener('pagehide', () => clearWindow(win), { once: true });
       containerRef.current = container;
@@ -165,20 +149,14 @@ export const useDesktopAssistantWindow = (): DesktopAssistantWindowState => {
     } catch (err) {
       // Not permitted (e.g. called without a user gesture) or already open:
       // the caller falls back to the in-page widget — the meeting is unaffected.
-      console.warn('Desktop floating window could not open:', err);
+      console.warn('Floating window could not open:', err);
       return null;
     } finally {
       openingRef.current = false;
     }
-  }, [clearWindow, isNativeAssistant]);
+  }, [clearWindow]);
 
   const closeWindow = useCallback(() => {
-    if (isNativeAssistant) {
-      // The main-window host owns meeting end and destroys the native window;
-      // this presentation-level close only hides it.
-      void hideNativeAssistantWindow();
-      return;
-    }
     const win = pipWindowRef.current;
     if (!win) return;
     // Triggers `pagehide`, which clears the state exactly once.
@@ -187,7 +165,7 @@ export const useDesktopAssistantWindow = (): DesktopAssistantWindowState => {
     } catch {
       // Already gone.
     }
-  }, [isNativeAssistant]);
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -216,10 +194,10 @@ export const useDesktopAssistantWindow = (): DesktopAssistantWindowState => {
   }, []);
 
   return {
-    mode: isNativeAssistant ? 'native' : isDocumentPiPSupported ? 'document-pip' : 'inline',
+    mode: isDocumentPiPSupported ? 'document-pip' : 'inline',
     isSupported,
-    isOpen: isNativeAssistant || pipWindow !== null,
-    window: isNativeAssistant ? window : pipWindow,
+    isOpen: pipWindow !== null,
+    window: pipWindow,
     container: pipWindow ? containerRef.current : null,
     openWindow,
     closeWindow,

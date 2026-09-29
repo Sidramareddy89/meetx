@@ -15,8 +15,9 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useMeeting } from '../contexts/MeetingContext';
 import { Meeting, getLanguageDisplayName } from '../types/meeting';
-import { getUserMeetings, deleteMeeting } from '../services/meetingService';
+import { subscribeUserMeetings, deleteMeeting } from '../services/meetingService';
 import { buildSummaryFromTranscript } from '../services/meetingInsightService';
+import { matchesMeetingHistoryRange } from '../services/meetingHistoryService';
 
 type PeriodFilter = '1day' | '1week' | '1month' | 'all' | 'custom';
 type MeetingBucket = 'today' | 'week' | 'month' | 'earlier';
@@ -49,6 +50,7 @@ const formatDateLabel = (ts: number): string => {
 // Short summary preview for each meeting card, generated from the actual
 // stored transcript (null when the meeting has no conversation yet).
 const meetingSummaryPreview = (m: Meeting): string | null => {
+  if (m.summary?.overview) return m.summary.overview;
   const transcript = m.transcript || [];
   if (transcript.length === 0) return null;
   return buildSummaryFromTranscript(m, transcript)?.overview || null;
@@ -72,26 +74,18 @@ export const MeetingHistoryPage: React.FC = () => {
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
 
-  // Phase 4: retrieve ONLY meetings actually saved for the authenticated user.
+  // Refresh from the same persisted stores while the History page is open.
   useEffect(() => {
-    let cancelled = false;
-    async function fetchUserMeetings() {
-      if (currentUser?.uid) {
-        setIsLoading(true);
-        const list = await getUserMeetings(currentUser.uid);
-        if (!cancelled) {
-          setUserMeetings([...list].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
-          setIsLoading(false);
-        }
-      } else {
-        setUserMeetings([]);
-        setIsLoading(false);
-      }
+    setIsLoading(true);
+    if (!currentUser?.uid) {
+      setUserMeetings([]);
+      setIsLoading(false);
+      return;
     }
-    fetchUserMeetings();
-    return () => {
-      cancelled = true;
-    };
+    return subscribeUserMeetings(currentUser.uid, (meetings) => {
+      setUserMeetings(meetings);
+      setIsLoading(false);
+    });
   }, [currentUser?.uid]);
 
   const matchesSearch = (m: Meeting): boolean => {
@@ -105,24 +99,11 @@ export const MeetingHistoryPage: React.FC = () => {
   };
 
   const matchesPeriod = (m: Meeting): boolean => {
-    const ts = m.createdAt || 0;
-    if (filterPeriod === 'all') return true;
-    if (filterPeriod === 'custom') {
-      if (customStartDate) {
-        const start = new Date(customStartDate + 'T00:00:00').getTime();
-        if (ts < start) return false;
-      }
-      if (customEndDate) {
-        const end = new Date(customEndDate + 'T23:59:59.999').getTime();
-        if (ts > end) return false;
-      }
-      return true;
-    }
-    const bucket = bucketFor(ts);
-    if (filterPeriod === '1day') return bucket === 'today';
-    if (filterPeriod === '1week') return bucket === 'today' || bucket === 'week';
-    if (filterPeriod === '1month') return bucket === 'today' || bucket === 'week' || bucket === 'month';
-    return true;
+    return matchesMeetingHistoryRange(m.createdAt, {
+      period: filterPeriod,
+      startDate: customStartDate,
+      endDate: customEndDate,
+    });
   };
 
 

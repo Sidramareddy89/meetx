@@ -27,12 +27,15 @@ import {
   getMeetingById,
   getUserMeetings,
   updateStoredMeeting,
+  subscribeMeeting,
+  subscribeUserMeetings,
 } from '../src/services/meetingService';
 import {
   buildSummaryFromTranscript,
   buildLiveBrief,
   mergeTranscriptEntriesById,
 } from '../src/services/meetingInsightService';
+import { matchesMeetingHistoryRange } from '../src/services/meetingHistoryService';
 
 const USER_A = 'user-lifecycle-a';
 const USER_B = 'user-lifecycle-b';
@@ -79,6 +82,10 @@ const installWindow = () => {
       const list = windowHandlers.get(type) || [];
       const at = list.indexOf(fn);
       if (at !== -1) list.splice(at, 1);
+    },
+    dispatchEvent: (event) => {
+      for (const handler of (windowHandlers.get(event.type) || []).slice()) handler(event);
+      return true;
     },
   };
 };
@@ -290,6 +297,13 @@ const main = async () => {
     !!(deadlineRecord?.summary?.actions && deadlineRecord.summary.actions.length > 0),
     `actions=${JSON.stringify(deadlineRecord?.summary?.actions)}`
   );
+  const spanishBrief = buildLiveBrief('Planificación', [entry('es-1', 'Ana se encargará de enviar el informe para el viernes.', 1)]);
+  check('multilingual insight cue detects a Spanish task without translating its source', spanishBrief?.actions[0]?.text.includes('Ana se encargará'));
+  check('multilingual insight cue preserves an explicitly spoken Spanish deadline', spanishBrief?.deadlines[0]?.date?.includes('viernes'));
+  const japaneseBrief = buildLiveBrief('計画', [entry('ja-1', '山田さんが来週までに資料を提出します。', 1)]);
+  check('multilingual insight cue detects a Japanese follow-up from the actual utterance', japaneseBrief?.actions[0]?.text === '山田さんが来週までに資料を提出します。');
+  const hindiBrief = buildLiveBrief('योजना', [entry('hi-1', 'रिपोर्ट शुक्रवार तक भेजेंगे।', 1)]);
+  check('multilingual insight cue detects a Hindi task and explicit deadline', !!hindiBrief?.actions.length && !!hindiBrief.deadlines[0]?.date?.includes('शुक्रवार'));
   withDeadline.ctx = mountProvider();
   withDeadline.ctx.stopMeetingSession();
   await tick();
@@ -680,6 +694,42 @@ const main = async () => {
     'case 6: history rows keep their real transcript data in Firestore mode',
     (cloudHistory.find((m) => m.id === F6)?.transcript || []).length === 5
   );
+
+  const localCopies = readStore(USER_A);
+  const localF6 = localCopies.find((m) => m.id === F6);
+  localF6.transcript.push(entry('f-local-only', 'This local transcript line must survive the stale cloud copy.', 6));
+  localF6.summary = { overview: 'Latest local insight', keyPoints: [], actions: [], updatedAt: 9999999999999 };
+  localF6.status = 'live';
+  localF6.duration = '9m 12s';
+  localStorage.setItem(keyFor(USER_A), JSON.stringify(localCopies));
+  const mergedF6 = await getMeetingById(F6, USER_A);
+  check('Firestore detail read merges transcript entries from local copy', mergedF6?.transcript.some((e) => e.id === 'f-local-only'));
+  check('newer local structured insights win over stale Firestore insights', mergedF6?.summary?.overview === 'Latest local insight');
+  check('status and duration follow the newer persisted meeting snapshot', mergedF6?.status === 'live' && mergedF6.duration === '9m 12s');
+  const mergedHistoryF6 = (await getUserMeetings(USER_A)).find((m) => m.id === F6);
+  check('History merges same-id Firestore and local transcript data', mergedHistoryF6?.transcript.some((e) => e.id === 'f-local-only'));
+
+  let historySnapshot = [];
+  const beforeSubscriptions = (windowHandlers.get('meetx:meetings-updated') || []).length;
+  const stopHistoryUpdates = subscribeUserMeetings(USER_A, (meetings) => { historySnapshot = meetings; });
+  check('History subscription immediately returns persisted meeting records', historySnapshot.some((m) => m.id === F6));
+  check('one same-tab persistence listener is registered', (windowHandlers.get('meetx:meetings-updated') || []).length === beforeSubscriptions + 1);
+  await updateStoredMeeting(F6, USER_A, { transcript: [entry('f-live-update', 'New persisted line.', 7)] });
+  check('same-tab meeting writes update the History subscription', historySnapshot.find((m) => m.id === F6)?.transcript.some((e) => e.id === 'f-live-update'));
+  stopHistoryUpdates();
+  check('History subscription removes its listener on cleanup', (windowHandlers.get('meetx:meetings-updated') || []).length === beforeSubscriptions);
+  let detailSnapshot = null;
+  const stopDetailUpdates = subscribeMeeting(F6, USER_A, (meeting) => { if (meeting) detailSnapshot = meeting; });
+  check('Detail subscription loads the same persisted transcript', detailSnapshot?.transcript.some((e) => e.id === 'f-local-only'));
+  stopDetailUpdates();
+
+  const fixedNow = new Date(2025, 5, 15, 12, 0, 0).getTime();
+  check('All Time accepts old real timestamps', matchesMeetingHistoryRange(fixedNow - 90 * 86400000, { period: 'all', now: fixedNow }));
+  check('1 Day uses the last 24 hours, not the calendar-day bucket', matchesMeetingHistoryRange(fixedNow - 23 * 3600000, { period: '1day', now: fixedNow }) && !matchesMeetingHistoryRange(fixedNow - 25 * 3600000, { period: '1day', now: fixedNow }));
+  check('1 Week uses a 7-day timestamp range', matchesMeetingHistoryRange(fixedNow - 6 * 86400000, { period: '1week', now: fixedNow }) && !matchesMeetingHistoryRange(fixedNow - 8 * 86400000, { period: '1week', now: fixedNow }));
+  check('1 Month uses a one-calendar-month timestamp range', matchesMeetingHistoryRange(fixedNow - 20 * 86400000, { period: '1month', now: fixedNow }) && !matchesMeetingHistoryRange(fixedNow - 40 * 86400000, { period: '1month', now: fixedNow }));
+  check('Custom Range includes the selected local-date boundaries', matchesMeetingHistoryRange(new Date(2025, 5, 10, 23, 59).getTime(), { period: 'custom', startDate: '2025-06-10', endDate: '2025-06-12', now: fixedNow }));
+  check('Custom Range excludes timestamps after the selected end date', !matchesMeetingHistoryRange(new Date(2025, 5, 13, 0, 0).getTime(), { period: 'custom', startDate: '2025-06-10', endDate: '2025-06-12', now: fixedNow }));
 
   // A foreign user's document must never surface in this user's history.
   globalThis.__meetxFs.set('meetings/meet-case6-foreign-doc', {

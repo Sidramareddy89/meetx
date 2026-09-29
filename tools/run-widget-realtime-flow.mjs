@@ -70,6 +70,7 @@ export const getDocs = async (q) => {
   }
   return { forEach: (cb) => list.forEach(cb), docs: () => list };
 };
+export const onSnapshot = () => () => {};
 export const deleteDoc = async (ref) => { store().delete(ref.path); };
 export const ref = (_storage, path) => ({ path });
 export const uploadBytes = async (target) => ({ ref: target });
@@ -94,7 +95,7 @@ const ICONS = [
 const ICON_STUB = `${ICONS.map((n) => `export const ${n} = () => null;`).join('\n')}\n`;
 
 /**
- * The desktop floating window renders the widget through a React portal into
+ * The browser floating window renders the widget through a React portal into
  * the Document PiP window. Node has no DOM (and no real react-dom), so the
  * portal records its container for assertions and renders the children
  * inline — the same tree the browser would show inside the window.

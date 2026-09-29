@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import {
@@ -26,17 +28,12 @@ import {
   Volume2,
   VolumeX,
   CheckCircle2,
-  AlertCircle,
   AlertTriangle,
-  Monitor,
   ShieldCheck,
-  X
 } from 'lucide-react';
-import { useAssistantMeeting } from '../../desktop/assistantBridge';
-import { hideNativeAssistantWindow, isNativeAssistantWindow } from '../../desktop/nativeAssistantWindow';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { useMeeting } from '../../contexts/MeetingContext';
 import { useSpeechToText } from '../../hooks/useSpeechToText';
-import { useDesktopAssistantWindow } from '../../hooks/useDesktopAssistantWindow';
+import { useFloatingAssistantWindow } from '../../hooks/useFloatingAssistantWindow';
 import { SUPPORTED_LANGUAGES } from '../../types/meeting';
 import { LiveConversationPane } from './LiveConversationPane';
 import { LiveBriefPane } from './LiveBriefPane';
@@ -47,58 +44,46 @@ const renderMessageContent = (
   copiedId: string | null,
   onCopy: (id: string, text: string) => void
 ) => {
-  if (text.includes('```')) {
-    const parts = text.split(/(```[\s\S]*?```)/g);
-    return parts.map((part, i) => {
-      if (part.startsWith('```') && part.endsWith('```')) {
-        const raw = part.slice(3, -3);
-        const newlineIdx = raw.indexOf('\n');
-        const lang = newlineIdx !== -1 ? raw.slice(0, newlineIdx).trim() : '';
-        const code = newlineIdx !== -1 ? raw.slice(newlineIdx + 1) : raw;
-        const codeId = `${msgId}-code-${i}`;
-        const isCopied = copiedId === codeId;
-        return (
-          <div
-            key={i}
-            className="my-2.5 rounded-xl bg-[#0d1117] border border-slate-700/70 overflow-hidden select-text shadow-lg"
-          >
-            <div className="flex items-center justify-between px-3 py-1.5 bg-slate-800/80 border-b border-slate-700/60 text-[10px]">
-              <span className="text-[10px] uppercase tracking-wider text-slate-300 font-mono font-semibold">
-                {lang || 'Code'}
-              </span>
-              <button
-                type="button"
-                onClick={() => onCopy(codeId, code)}
-                className="flex items-center gap-1 text-[10px] text-slate-300 hover:text-emerald-300 transition-colors cursor-pointer py-0.5 px-1.5 rounded hover:bg-slate-700/50"
-                title="Copy code snippet"
-              >
-                {isCopied ? (
-                  <>
-                    <Check className="w-3 h-3 text-emerald-400" />
-                    <span className="text-emerald-400 font-medium">Copied</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3 h-3 text-slate-400" />
-                    <span>Copy code</span>
-                  </>
-                )}
+  let codeIndex = 0;
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => <h1 className="my-2 text-base font-bold">{children}</h1>,
+        h2: ({ children }) => <h2 className="my-2 text-sm font-bold">{children}</h2>,
+        h3: ({ children }) => <h3 className="my-1.5 text-xs font-bold">{children}</h3>,
+        p: ({ children }) => <p className="my-1.5 whitespace-pre-wrap leading-relaxed">{children}</p>,
+        strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+        em: ({ children }) => <em>{children}</em>,
+        ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+        ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
+        li: ({ children }) => <li className="pl-0.5">{children}</li>,
+        blockquote: ({ children }) => <blockquote className="my-2 border-l-2 border-slate-500 pl-3 text-slate-300">{children}</blockquote>,
+        table: ({ children }) => <div className="my-2 overflow-x-auto"><table className="min-w-full border-collapse text-left">{children}</table></div>,
+        th: ({ children }) => <th className="border border-slate-700 bg-slate-800 px-2 py-1 font-semibold">{children}</th>,
+        td: ({ children }) => <td className="border border-slate-700 px-2 py-1">{children}</td>,
+        a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" className="text-cyan-300 underline">{children}</a>,
+        code: ({ children, className }) => {
+          const code = String(children).replace(/\n$/, '');
+          if (!className && !String(children).endsWith('\n')) {
+            return <code className="rounded bg-slate-800 px-1 py-0.5 font-mono text-[0.92em] text-emerald-200">{children}</code>;
+          }
+          const language = className?.match(/language-(\S+)/)?.[1] || 'Code';
+          const codeId = `${msgId}-code-${codeIndex++}`;
+          const isCopied = copiedId === codeId;
+          return <div className="my-2.5 overflow-hidden rounded-xl border border-slate-700/70 bg-[#0d1117] shadow-lg">
+            <div className="flex items-center justify-between border-b border-slate-700/60 bg-slate-800/80 px-3 py-1.5 text-[10px]">
+              <span className="font-mono font-semibold uppercase tracking-wider text-slate-300">{language}</span>
+              <button type="button" onClick={() => onCopy(codeId, code)} className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-slate-300 hover:bg-slate-700/50 hover:text-emerald-300" title="Copy code snippet">
+                {isCopied ? <><Check className="h-3 w-3 text-emerald-400" /><span className="text-emerald-400">Copied</span></> : <><Copy className="h-3 w-3 text-slate-400" /><span>Copy code</span></>}
               </button>
             </div>
-            <pre className="p-3 font-mono text-[11px] leading-relaxed text-emerald-300 overflow-x-auto whitespace-pre">
-              {code}
-            </pre>
-          </div>
-        );
-      }
-      return (
-        <div key={i} className="whitespace-pre-line leading-relaxed">
-          {part}
-        </div>
-      );
-    });
-  }
-  return <div className="whitespace-pre-line leading-relaxed">{text}</div>;
+            <pre className="overflow-x-auto whitespace-pre p-3 font-mono text-[11px] leading-relaxed text-emerald-300"><code>{code}</code></pre>
+          </div>;
+        },
+      }}
+    >{text}</ReactMarkdown>
+  );
 };
 
 type WidgetPosition = { x: number; y: number };
@@ -112,7 +97,7 @@ const clampWidgetPosition = (
   nextPosition: WidgetPosition,
   widget: HTMLDivElement | null,
   // The viewport of whichever window hosts the widget: the app window in-page,
-  // or the desktop floating window while it is open.
+  // or the Picture-in-Picture floating window while it is open.
   viewport: Pick<Window, 'innerWidth' | 'innerHeight'> = window
 ): WidgetPosition => {
   const width = widget?.offsetWidth || FALLBACK_WIDGET_WIDTH;
@@ -179,11 +164,11 @@ export const FloatingAssistantWidget: React.FC = () => {
     toggleActionCheck,
     isDetectable,
     setIsDetectable,
+    isEntireScreenShareReported,
+    setIsEntireScreenShareReported,
     hideMeetxHidesWidget,
     setHideMeetxHidesWidget,
     setIsPlatformClosed,
-    isEntireScreenShareReported,
-    setIsEntireScreenShareReported,
     setIsPlanModalOpen,
     freeMeetingsLeft,
     isProUser,
@@ -192,16 +177,7 @@ export const FloatingAssistantWidget: React.FC = () => {
     askAssistant,
     addTranscriptEntry,
     isThinking,
-    contentProtection,
-  } = useAssistantMeeting();
-  const entireScreenWarning = !isDetectable && isEntireScreenShareReported;
-  const isNativeAssistant = isNativeAssistantWindow();
-
-  useEffect(() => {
-    if (isDetectable && isEntireScreenShareReported) {
-      setIsEntireScreenShareReported(false);
-    }
-  }, [isDetectable, isEntireScreenShareReported, setIsEntireScreenShareReported]);
+  } = useMeeting();
 
   const [inputQuery, setInputQuery] = useState('');
   const [activeAssistantMode, setActiveAssistantMode] = useState<AssistantMode>('assist');
@@ -214,6 +190,23 @@ export const FloatingAssistantWidget: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  /**
+   * Privacy state: the user reports they are sharing Entire Screen, which can
+   * include the separate floating assistant window. MEETX cannot detect sharing
+   * started inside another application, so the user declares it here.
+   */
+  const entireScreenWarning = !isDetectable && isEntireScreenShareReported;
+
+  /**
+   * Turning Private Mode off invalidates a pending Entire Screen report: the
+   * user is no longer claiming the floating window is hidden from capture.
+   */
+  useEffect(() => {
+    if (isDetectable && isEntireScreenShareReported) {
+      setIsEntireScreenShareReported(false);
+    }
+  }, [isDetectable, isEntireScreenShareReported, setIsEntireScreenShareReported]);
 
   const handleCopy = (id: string, textToCopy: string) => {
     if (navigator?.clipboard?.writeText) {
@@ -284,41 +277,38 @@ export const FloatingAssistantWidget: React.FC = () => {
   }, [liveTranscript.length]);
 
 
-  // --- Desktop window adapter: native Tauri or browser Document PiP ----------
+  // --- Browser floating-window adapter: Document Picture-in-Picture ----------
   // The React app (meeting, transcript, AI, persistence) always runs in THIS
-  // opener document; the desktop window only hosts the widget's DOM through a
+  // opener document; the floating window only hosts the widget's DOM through a
   // portal. Opening, closing or hiding that window therefore never starts or
   // stops a meeting — MeetingContext above is the single source of truth.
   const {
-    isSupported: isDesktopWindowSupported,
-    window: desktopWindow,
-    container: desktopContainer,
-    openWindow: openDesktopWindow,
-    closeWindow: closeDesktopWindow,
-  } = useDesktopAssistantWindow();
-  // Event/viewport host: the assistant webview/PiP document, or this page.
-  const hostEventTarget: Window = desktopWindow ?? window;
-  const hostDocument: Document = desktopWindow?.document ?? document;
+    isSupported: isFloatingWindowSupported,
+    window: floatingWindow,
+    container: floatingContainer,
+    openWindow: openFloatingWindow,
+    closeWindow: closeFloatingWindow,
+  } = useFloatingAssistantWindow();
+  // Event/viewport host: the Picture-in-Picture document, or this page.
+  const hostEventTarget: Window = floatingWindow ?? window;
+  const hostDocument: Document = floatingWindow?.document ?? document;
 
   // Initialize Speech-to-Text + real-time translation.
   // Voice -> text -> (translated) -> LLM answer: when a voice question is
   // detected, route it to the assistant for a text answer.
   const { startListening, stopListening, isTranslating, isListening, isSupported } = useSpeechToText({
     language: selectedLanguage.code,
-    hostWindow: desktopWindow ?? undefined,
+    hostWindow: floatingWindow ?? undefined,
     targetLanguage: translationEnabled ? targetLanguage.code : undefined,
     speakTranslations,
     onTranscriptReceived: (entry) => {
       addTranscriptEntry(entry);
     },
-    onVoiceQuery: (text) => {
+    onVoiceQuery: (text, transcriptEntryId) => {
       // PIPELINE 2: Voice question detected → route to the QA pipeline.
       // Record the latest transcript entry ID so Pipeline 1 auto-follow skips
       // this same entry and never produces a QUERY + ASSIST duplicate.
-      const lastEntry = liveTranscript[liveTranscript.length - 1];
-      if (lastEntry) {
-        voiceQueryHandledIdRef.current = lastEntry.id;
-      }
+      voiceQueryHandledIdRef.current = transcriptEntryId;
       askAssistant(text, 'query');
     },
   });
@@ -334,28 +324,28 @@ export const FloatingAssistantWidget: React.FC = () => {
     };
   }, [isFloatingActive, startListening, stopListening]);
 
-  // Desktop-window lifecycle tied to the MEETING (rising/falling edge):
+  // Floating-window lifecycle tied to the MEETING (rising/falling edge):
   //   meeting starts → the always-on-top window opens (falling back to the
   //                     in-page widget when unsupported or when the browser
   //                     refuses the open, e.g. without a user gesture)
   //   meeting stops  → the window closes and cleans up (TEST 9/10)
   // Closing the window MANUALLY is deliberately not wired into this effect:
   // the meeting keeps running in MeetingContext and the widget simply
-  // reappears in-page until the user restores the desktop window
+  // reappears in-page until the user reopens the floating window
   // (requirement: hiding/closing the assistant never ends the meeting).
   const wasMeetingActiveRef = useRef(false);
   useEffect(() => {
-    if (!isDesktopWindowSupported) return;
+    if (!isFloatingWindowSupported) return;
     if (isFloatingActive && !wasMeetingActiveRef.current) {
-      void openDesktopWindow();
+      void openFloatingWindow();
     } else if (!isFloatingActive && wasMeetingActiveRef.current) {
-      closeDesktopWindow();
+      closeFloatingWindow();
     }
     wasMeetingActiveRef.current = isFloatingActive;
-  }, [isFloatingActive, isDesktopWindowSupported, openDesktopWindow, closeDesktopWindow]);
+  }, [isFloatingActive, isFloatingWindowSupported, openFloatingWindow, closeFloatingWindow]);
 
   // Remember where the widget was last dragged (in-page position; the OS
-  // position of the desktop window itself cannot be stored — the Document
+  // position of the floating window itself cannot be stored — the Document
   // PiP API does not let the website read or set it).
   useEffect(() => {
     if (isDragging) return;
@@ -379,6 +369,8 @@ export const FloatingAssistantWidget: React.FC = () => {
         setIsWidgetCollapsed(!isWidgetCollapsed);
       }
       if (e.ctrlKey && e.key === 'Enter') {
+        const target = e.target;
+        if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return;
         e.preventDefault();
         if (inputQuery.trim()) {
           handleSend();
@@ -415,7 +407,7 @@ export const FloatingAssistantWidget: React.FC = () => {
   // (the PiP window while open, otherwise the app window), and re-clamp
   // immediately whenever that host changes.
   useEffect(() => {
-    const viewport = desktopWindow ?? window;
+    const viewport = floatingWindow ?? window;
     const handleViewportResize = () => {
       setPosition((currentPosition) =>
         clampWidgetPosition(currentPosition, widgetRef.current, viewport)
@@ -425,15 +417,11 @@ export const FloatingAssistantWidget: React.FC = () => {
     handleViewportResize();
     viewport.addEventListener('resize', handleViewportResize);
     return () => viewport.removeEventListener('resize', handleViewportResize);
-  }, [desktopWindow]);
+  }, [floatingWindow]);
 
   // Draggable logic
   const handleMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('.drag-handle')) {
-      if (isNativeAssistant) {
-        void getCurrentWebviewWindow().startDragging();
-        return;
-      }
       setIsDragging(true);
       setDragOffset({
         x: e.clientX - position.x,
@@ -474,7 +462,7 @@ export const FloatingAssistantWidget: React.FC = () => {
   // As requested: clicking the logo in the widget takes user to home page
   const handleLogoClick = () => {
     setIsPlatformClosed(false);
-    navigate('/home');
+    navigate('/home', { replace: true });
   };
 
   const handleSend = () => {
@@ -524,9 +512,7 @@ export const FloatingAssistantWidget: React.FC = () => {
   const widgetNode = (
     <div
       ref={widgetRef}
-      style={isNativeAssistant
-        ? { left: 0, top: 0, width: '100%', position: 'relative' }
-        : { left: `${position.x}px`, top: `${position.y}px` }}
+      style={{ left: `${position.x}px`, top: `${position.y}px` }}
       onMouseDown={handleMouseDown}
       className="fixed z-[9999] flex flex-col items-center select-none font-sans"
     >
@@ -544,41 +530,34 @@ export const FloatingAssistantWidget: React.FC = () => {
           onClick={() => setIsWidgetCollapsed(!isWidgetCollapsed)}
           title={isWidgetCollapsed ? 'Show assistant' : 'Hide assistant'}
           aria-label={isWidgetCollapsed ? 'Show assistant' : 'Hide assistant'}
-          className="h-6 w-6 rounded-full text-slate-300 hover:text-white hover:bg-slate-700/50 flex items-center justify-center transition-colors cursor-pointer"
+          className="h-6 px-2 rounded-full text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-700/50 flex items-center gap-1 transition-colors cursor-pointer"
         >
           {isWidgetCollapsed ? (
-            <ChevronUp className="w-3.5 h-3.5" />
+            <><ChevronUp className="w-3.5 h-3.5" /> Show</>
           ) : (
-            <ChevronDown className="w-3.5 h-3.5" />
+            <><ChevronDown className="w-3.5 h-3.5" /> Hide</>
           )}
         </button>
 
-        <button
-          onClick={() => setIsWidgetCollapsed(!isWidgetCollapsed)}
-          className="h-6 px-2 rounded-full text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-700/50 transition-colors cursor-pointer"
-        >
-          {isWidgetCollapsed ? 'Show' : 'Hide'}
-        </button>
-
-        {/* Desktop always-on-top window toggle (Document PiP; Chromium-only) */}
-        {isDesktopWindowSupported && (
+        {/* Floating always-on-top window toggle (Document PiP; Chromium-only) */}
+        {isFloatingWindowSupported && (
           <button
             type="button"
             onClick={() => {
-              if (desktopWindow) closeDesktopWindow();
-              else void openDesktopWindow();
+              if (floatingWindow) closeFloatingWindow();
+              else void openFloatingWindow();
             }}
             title={
-              desktopWindow
-                ? 'Close desktop floating window (meeting keeps running)'
-                : 'Open desktop floating window (always on top)'
+              floatingWindow
+                ? 'Close floating window (meeting keeps running)'
+                : 'Open floating window (always on top)'
             }
             aria-label={
-              desktopWindow
-                ? 'Close desktop floating window'
-                : 'Open desktop floating window'
+              floatingWindow
+                ? 'Close floating window'
+                : 'Open floating window'
             }
-            className={`h-6 w-6 rounded-full flex items-center justify-center transition-colors cursor-pointer ${desktopWindow
+            className={`h-6 w-6 rounded-full flex items-center justify-center transition-colors cursor-pointer ${floatingWindow
               ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
               : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
               }`}
@@ -587,16 +566,10 @@ export const FloatingAssistantWidget: React.FC = () => {
           </button>
         )}
 
-        {isNativeAssistant && (
-          <button type="button" onClick={() => void hideNativeAssistantWindow()} title="Hide assistant window; meeting continues" aria-label="Hide assistant window" className="h-6 w-6 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700/50">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        )}
-
         {/* Private mode indicator pill */}
         {!isDetectable && (
           <span
-            title="Private Mode: the separate assistant window stays outside a Browser Tab or Application Window capture. Entire Screen sharing can include it."
+            title="Private Mode: the floating assistant window stays outside a Browser Tab or Application Window capture. Entire Screen sharing can include it."
             className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] text-emerald-400 font-medium cursor-help"
           >
             <EyeOff className="w-3 h-3 text-emerald-400" />
@@ -634,12 +607,6 @@ export const FloatingAssistantWidget: React.FC = () => {
               <button type="button" onClick={() => setIsEntireScreenShareReported(true)} className="shrink-0 rounded-lg border border-amber-500/40 px-2 py-1 text-amber-200 hover:bg-amber-500/10">I’m sharing Entire Screen</button>
             </div>
           )}
-        </div>
-      )}
-
-      {!isDetectable && isNativeAssistant && contentProtection && (
-        <div role="status" className={`mt-1 rounded-lg px-3 py-1.5 text-[10px] ${contentProtection.status === 'protected' ? 'bg-emerald-950/80 text-emerald-200' : 'bg-amber-950/80 text-amber-200'}`}>
-          <strong>OS content protection: {contentProtection.status === 'protected' ? 'Protected' : contentProtection.status === 'unsupported' ? 'Unsupported' : contentProtection.status === 'not-available' ? 'Not Available' : contentProtection.status === 'unknown' ? 'Unknown' : 'Not requested'}.</strong> {contentProtection.detail}
         </div>
       )}
 
@@ -843,6 +810,12 @@ export const FloatingAssistantWidget: React.FC = () => {
               value={inputQuery}
               onChange={(e) => setInputQuery(e.target.value)}
               onKeyDown={(e) => {
+                if (e.ctrlKey && e.key === 'Enter') {
+                  e.preventDefault();
+                  if (inputQuery.trim()) handleSend();
+                  else askAssistant('What should I say right now based on our context?', 'say');
+                  return;
+                }
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   handleSend();
@@ -934,10 +907,10 @@ export const FloatingAssistantWidget: React.FC = () => {
                               <span>Private Sharing Guide</span>
                             </div>
                             <p className="text-slate-300 text-[9.5px] leading-relaxed">
-                              ✅ <strong>Supported:</strong> In your meeting app (Zoom/Meet/Teams), share a specific <strong>Browser Tab</strong> or <strong>Application Window</strong>. This assistant remains outside that capture.
+                              ✅ <strong>Supported:</strong> In your meeting app (Zoom/Meet/Teams), share a specific <strong>Browser Tab</strong> or <strong>Application Window</strong>. This floating assistant window remains outside that capture.
                             </p>
                             <p className="text-amber-300/90 text-[9.5px] leading-relaxed">
-                              ⚠️ <strong>Limitation:</strong> Do not select <strong>Entire Screen</strong>, which captures all desktop pixels.
+                              ⚠️ <strong>Limitation:</strong> Do not select <strong>Entire Screen</strong>, which captures every pixel on your display.
                             </p>
                           </div>
                         )}
@@ -1001,11 +974,10 @@ export const FloatingAssistantWidget: React.FC = () => {
     </div>
   );
 
-  // Browser PiP portals the same widget tree; Tauri already renders this
-  // component in its dedicated native assistant webview.
+  // The browser PiP window portals the same widget tree.
   // Meeting state is unaffected by this switch — it lives in MeetingContext
   // above; closing the window simply falls back to the in-page render until
-  // the user restores the desktop window (same session, same state).
-  if (desktopContainer) return createPortal(widgetNode, desktopContainer);
+  // the user reopens the floating window (same session, same state).
+  if (floatingContainer) return createPortal(widgetNode, floatingContainer);
   return widgetNode;
 };

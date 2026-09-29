@@ -1,5 +1,5 @@
 /**
- * MEETX — harness for tools/desktop-assistant-window.test.mjs
+ * MEETX — harness for tools/floating-window-lifecycle.test.mjs
  *
  * Bundles the REAL `FloatingAssistantWidget` + `MeetingProvider` (and
  * everything they pull in: meetingService, meetingInsightService,
@@ -17,8 +17,8 @@
  * Node (its Web-Speech-absent fallback path), which also exercises the new
  * `hostWindow` wiring without a browser.
  *
- * Usage:  node tools/run-desktop-assistant-window.mjs
- * Exit code 0 = all desktop-window lifecycle assertions passed.
+ * Usage:  node tools/run-floating-window-lifecycle.mjs
+ * Exit code 0 = all floating-window lifecycle assertions passed.
  */
 
 import { build } from 'esbuild';
@@ -28,10 +28,10 @@ import { dirname, resolve } from 'node:path';
 import { existsSync, rmSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const entry = resolve(__dirname, 'desktop-assistant-window.test.mjs');
+const entry = resolve(__dirname, 'floating-window-lifecycle.test.mjs');
 const reactShim = resolve(__dirname, 'react-hook-shim.mjs');
 const authStub = resolve(__dirname, 'auth-context-stub.mjs');
-const outfile = resolve(__dirname, '.desktop-assistant-window.tmp.mjs');
+const outfile = resolve(__dirname, '.floating-window-lifecycle.tmp.mjs');
 
 const FIREBASE_STUB = `
 const store = () => (globalThis.__meetxFs = globalThis.__meetxFs || new Map());
@@ -71,6 +71,7 @@ export const getDocs = async (q) => {
   }
   return { forEach: (cb) => list.forEach(cb), docs: () => list };
 };
+export const onSnapshot = () => () => {};
 export const deleteDoc = async (ref) => { store().delete(ref.path); };
 export const ref = (_storage, path) => ({ path });
 export const uploadBytes = async (target) => ({ ref: target });
@@ -95,7 +96,7 @@ const ICONS = [
 const ICON_STUB = `${ICONS.map((n) => `export const ${n} = () => null;`).join('\n')}\n`;
 
 /**
- * The desktop floating window renders the widget through a React portal into
+ * The floating window renders the widget through a React portal into
  * the Document PiP window. Node has no DOM (and no real react-dom), so the
  * portal records its container for assertions and renders the children
  * inline — the same tree the browser would show inside the window.
@@ -110,7 +111,7 @@ export default { createPortal };
 `;
 
 const stubPlugin = {
-  name: 'meetx-desktop-window-boundaries',
+  name: 'meetx-floating-window-boundaries',
   setup(buildApi) {
     const namespace = 'meetx-stub';
     buildApi.onResolve({ filter: /^react$/ }, () => ({ path: reactShim }));
@@ -132,7 +133,7 @@ const stubPlugin = {
 };
 
 if (!existsSync(entry) || !existsSync(reactShim) || !existsSync(authStub)) {
-  console.error('! desktop assistant window harness inputs missing');
+  console.error('! floating window harness inputs missing');
   process.exit(1);
 }
 

@@ -11,10 +11,10 @@ interface UseSpeechToTextProps {
   /** When true, speak every translated/final line aloud via SpeechSynthesis. */
   speakTranslations?: boolean;
   onTranscriptReceived: (entry: MeetingTranscriptEntry) => void;
-  onVoiceQuery?: (text: string) => void;
+  onVoiceQuery?: (text: string, transcriptEntryId: string) => void;
   /**
    * Window whose realm hosts the Web Speech recognizer. Defaults to the app
-   * window. The desktop floating window (Document Picture-in-Picture) passes
+   * window. The browser floating assistant window (Document Picture-in-Picture) passes
    * its own window so recognition runs in the ALWAYS-VISIBLE document: the
    * opener tab can be backgrounded when the user switches tabs or
    * applications — which may stall recognition — while the PiP window itself
@@ -114,7 +114,7 @@ export const useSpeechToText = ({ language, targetLanguage, speakTranslations, o
   const startTokenRef = useRef(0);
 
   const startListening = useCallback(() => {
-    // Prefer the constructors of the HOST window (the desktop floating window
+    // Prefer the constructors of the HOST window (the floating assistant window
     // when it is open) and fall back to the app window, so a host without the
     // Web Speech API degrades to the opener instead of to "unsupported".
     const host = hostWindow ?? window;
@@ -200,7 +200,7 @@ export const useSpeechToText = ({ language, targetLanguage, speakTranslations, o
                     }
                   }
                   if (emitVoiceQuery && looksLikeQuestion(translated)) {
-                    emitVoiceQuery(translated);
+                    emitVoiceQuery(translated, `${id}-t`);
                   }
                 })
                 .finally(() => setIsTranslating(false));
@@ -225,7 +225,7 @@ export const useSpeechToText = ({ language, targetLanguage, speakTranslations, o
               // Voice -> text -> LLM answer: if the utterance is a question,
               // route it to the assistant for a text answer via the LLM + RAG.
               if (emitVoiceQuery && looksLikeQuestion(text)) {
-                emitVoiceQuery(text);
+                emitVoiceQuery(text, id);
               }
             }
           }

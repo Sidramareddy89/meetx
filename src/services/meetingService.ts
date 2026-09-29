@@ -4,6 +4,7 @@ import {
   setDoc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   where,
   orderBy,
@@ -22,6 +23,12 @@ import { mergeTranscriptEntriesById } from './meetingInsightService';
  * this size is kept in memory for the live session only (metadata persists).
  */
 const MAX_LOCAL_RESOURCE_URL_CHARS = 250 * 1024; // ~250 KB
+
+const notifyMeetingStoreChanged = (): void => {
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new Event('meetx:meetings-updated'));
+  }
+};
 
 const trimResourceForLocalPersistence = (resource: MeetingResource): MeetingResource => {
   if (resource.url && resource.url.length > MAX_LOCAL_RESOURCE_URL_CHARS) {
@@ -182,6 +189,7 @@ export async function saveMeeting(
       localStorage.setItem(localKey, JSON.stringify(slimmedList));
       console.warn('Local storage quota exceeded; stored resource metadata only:', quotaErr);
     }
+    notifyMeetingStoreChanged();
   } catch (localErr) {
     console.warn('Local storage sync warning:', localErr);
   }
@@ -226,6 +234,7 @@ export async function getMeetingById(
   meetingId: string,
   userId: string
 ): Promise<Meeting | null> {
+  const localMeeting = readLocalMeeting(meetingId, userId);
   // 1. Try Firestore if configured
   if (isFirebaseConfigured()) {
     try {
@@ -238,7 +247,7 @@ export async function getMeetingById(
           // F2: the document key is the authoritative meeting id, so a document
           // written by a transcript flush (which may predate the id field) still
           // resolves to the right meeting instead of a new, unrelated one.
-          return { ...data, id: data.id || meetingId };
+          return mergeMeetingRecords({ ...data, id: data.id || meetingId }, localMeeting);
         }
       }
     } catch (fsErr) {
@@ -247,20 +256,82 @@ export async function getMeetingById(
   }
 
   // 2. Fallback to user's local meetings store
-  try {
-    const localKey = `meetx_meetings_${userId}`;
-    const existingRaw = localStorage.getItem(localKey);
-    if (existingRaw) {
-      const list: Meeting[] = JSON.parse(existingRaw);
-      const found = list.find((m) => m.id === meetingId && m.userId === userId);
-      if (found) return found;
-    }
-  } catch (localErr) {
-    console.warn('Local retrieval warning:', localErr);
+  return localMeeting;
+}
+
+/** Subscribe to the persisted state of one meeting, scoped to its owner. */
+export function subscribeMeeting(meetingId: string, userId: string, onMeeting: (meeting: Meeting | null) => void): () => void {
+  let active = true;
+  const emitLocal = () => {
+    if (active) onMeeting(readLocalMeeting(meetingId, userId));
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('meetx:meetings-updated', emitLocal);
+    window.addEventListener('storage', emitLocal);
+  }
+  emitLocal();
+
+  let unsubscribeFirestore = () => {};
+  if (isFirebaseConfigured()) {
+    unsubscribeFirestore = onSnapshot(doc(db, 'meetings', meetingId), (snapshot) => {
+      if (!active) return;
+      if (!snapshot.exists()) {
+        onMeeting(readLocalMeeting(meetingId, userId));
+        return;
+      }
+      const data = snapshot.data() as Meeting;
+      if (data.userId !== userId) return onMeeting(null);
+      onMeeting(mergeMeetingRecords({ ...data, id: data.id || meetingId }, readLocalMeeting(meetingId, userId)));
+    }, (err) => {
+      console.warn('Firestore meeting subscription warning:', err);
+      emitLocal();
+    });
   }
 
-  return null;
+  return () => {
+    active = false;
+    unsubscribeFirestore();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('meetx:meetings-updated', emitLocal);
+      window.removeEventListener('storage', emitLocal);
+    }
+  };
 }
+
+const readLocalMeeting = (meetingId: string, userId: string): Meeting | null => {
+  try {
+    const raw = localStorage.getItem(`meetx_meetings_${userId}`);
+    const list: Meeting[] = raw ? JSON.parse(raw) : [];
+    return list.find((m) => m.id === meetingId && m.userId === userId) || null;
+  } catch (err) {
+    console.warn('Local meeting read warning:', err);
+    return null;
+  }
+};
+
+/** Merge the two existing copies of one meeting without dropping richer data. */
+const mergeMeetingRecords = (primary: Meeting, fallback?: Meeting | null): Meeting => {
+  if (!fallback || fallback.id !== primary.id || fallback.userId !== primary.userId) return primary;
+  const primarySummaryAt = primary.summary?.updatedAt || 0;
+  const fallbackSummaryAt = fallback.summary?.updatedAt || 0;
+  const fallbackIsNewer = fallbackSummaryAt > primarySummaryAt;
+  const newerRecord = fallbackIsNewer ? fallback : primary;
+  const summary = fallbackIsNewer ? fallback.summary : primary.summary || fallback.summary;
+  return {
+    ...fallback,
+    ...primary,
+    id: primary.id,
+    title: primary.title || fallback.title,
+    topic: primary.topic || fallback.topic,
+    platform: primary.platform || fallback.platform,
+    selectedLanguage: primary.selectedLanguage || fallback.selectedLanguage,
+    createdAt: primary.createdAt || fallback.createdAt,
+    status: newerRecord.status || primary.status || fallback.status,
+    duration: newerRecord.duration || primary.duration || fallback.duration,
+    transcript: mergeTranscriptEntriesById(primary.transcript, fallback.transcript),
+    summary,
+  };
+};
 
 /**
  * Retrieve all meetings belonging to the authenticated user.
@@ -270,7 +341,8 @@ export async function getUserMeetings(userId: string): Promise<Meeting[]> {
   // read and merged by meeting id: a meeting saved while Firestore was
   // unreachable (or before the first sync) lives only in the local store and
   // used to disappear from History as soon as Firestore returned any document.
-  // Firestore wins for an id it has; a local-only record is still listed.
+  // Firestore and local records are merged by id, retaining transcript and
+  // insights from whichever copy has the latest/richer persisted data.
   // Both sides are filtered by `userId`, so no other user's meeting can appear.
   const byId = new Map<string, Meeting>();
 
@@ -290,7 +362,10 @@ export async function getUserMeetings(userId: string): Promise<Meeting[]> {
         // has the transcript (written by a flush before the initial save) is
         // still listed, under its real id, instead of disappearing.
         const id = data.id || d.id;
-        if (data.userId === userId && id) byId.set(id, { ...data, id });
+        if (data.userId === userId && id) {
+          const remote = { ...data, id };
+          byId.set(id, mergeMeetingRecords(remote, byId.get(id)));
+        }
       });
     } catch (fsErr) {
       console.warn('Firestore query warning:', fsErr);
@@ -305,7 +380,9 @@ export async function getUserMeetings(userId: string): Promise<Meeting[]> {
     if (raw) {
       const list: Meeting[] = JSON.parse(raw);
       for (const m of list) {
-        if (m && m.userId === userId && m.id && !byId.has(m.id)) byId.set(m.id, m);
+        if (m && m.userId === userId && m.id) {
+          byId.set(m.id, mergeMeetingRecords(byId.get(m.id) || m, m));
+        }
       }
     }
   } catch (err) {
@@ -313,6 +390,66 @@ export async function getUserMeetings(userId: string): Promise<Meeting[]> {
   }
 
   return Array.from(byId.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+/** Subscribe to persisted meeting changes using Firestore snapshots and local fallback events. */
+export function subscribeUserMeetings(userId: string, onMeetings: (meetings: Meeting[]) => void): () => void {
+  let remoteMeetings: Meeting[] = [];
+  let active = true;
+  const emitMerged = () => {
+    if (!active) return;
+    const merged = new Map<string, Meeting>();
+    for (const meeting of remoteMeetings) merged.set(meeting.id, meeting);
+    try {
+      const raw = localStorage.getItem(`meetx_meetings_${userId}`);
+      const local: Meeting[] = raw ? JSON.parse(raw) : [];
+      for (const meeting of local) {
+        if (meeting?.userId === userId && meeting.id) {
+          merged.set(meeting.id, mergeMeetingRecords(merged.get(meeting.id) || meeting, meeting));
+        }
+      }
+    } catch (err) {
+      console.warn('Local user meetings parse error:', err);
+    }
+    onMeetings(Array.from(merged.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+  };
+
+  const refreshLocal = () => emitMerged();
+  if (typeof window !== 'undefined') {
+    window.addEventListener('meetx:meetings-updated', refreshLocal);
+    window.addEventListener('storage', refreshLocal);
+  }
+  emitMerged();
+
+  let unsubscribeFirestore = () => {};
+  if (isFirebaseConfigured()) {
+    const q = query(
+      collection(db, 'meetings'),
+      where('userId', '==', userId),
+      orderBy('createdAt', 'desc')
+    );
+    unsubscribeFirestore = onSnapshot(q, (snapshot) => {
+      remoteMeetings = [];
+      snapshot.forEach((d) => {
+        const data = d.data() as Meeting;
+        const id = data?.id || d.id;
+        if (data?.userId === userId && id) remoteMeetings.push({ ...data, id });
+      });
+      emitMerged();
+    }, (err) => {
+      console.warn('Firestore meeting subscription warning:', err);
+      emitMerged();
+    });
+  }
+
+  return () => {
+    active = false;
+    unsubscribeFirestore();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('meetx:meetings-updated', refreshLocal);
+      window.removeEventListener('storage', refreshLocal);
+    }
+  };
 }
 
 /**
@@ -379,6 +516,7 @@ export async function updateStoredMeeting(
         localStorage.setItem(localKey, JSON.stringify(slimmed));
         console.warn('Local storage quota exceeded during meeting update:', quotaErr);
       }
+      notifyMeetingStoreChanged();
     }
   } catch (localErr) {
     console.warn('Local meeting update warning:', localErr);
@@ -452,6 +590,7 @@ export async function deleteMeeting(meetingId: string, userId: string): Promise<
       const list: Meeting[] = JSON.parse(raw);
       const next = list.filter((m) => !(m.id === meetingId && m.userId === userId));
       localStorage.setItem(localKey, JSON.stringify(next));
+      notifyMeetingStoreChanged();
     }
   } catch (localErr) {
     console.warn('Local meeting delete warning:', localErr);

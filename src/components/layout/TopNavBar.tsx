@@ -23,7 +23,18 @@ export const TopNavBar: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { currentUser, logout } = useAuth();
-  const { isDetectable, setIsDetectable, selectedLanguage, setSelectedLanguage, searchQuery, setSearchQuery } = useMeeting();
+  const {
+    isDetectable,
+    setIsDetectable,
+    selectedLanguage,
+    setSelectedLanguage,
+    searchQuery,
+    setSearchQuery,
+    isFloatingActive,
+    stopMeetingSession,
+    clearTranscript,
+    clearAssistantMessages,
+  } = useMeeting();
 
   const [isLangOpen, setIsLangOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -75,6 +86,9 @@ export const TopNavBar: React.FC = () => {
   };
 
   const handleLogout = async () => {
+    if (isFloatingActive) stopMeetingSession();
+    clearTranscript();
+    clearAssistantMessages();
     await logout();
     navigate('/landing');
   };

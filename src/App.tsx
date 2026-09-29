@@ -15,26 +15,12 @@ import { CompleteProfilePage } from './pages/CompleteProfilePage';
 import { ProfilePage } from './pages/ProfilePage';
 import { MeetingHistoryPage } from './pages/MeetingHistoryPage';
 import { MeetingDetailPage } from './pages/MeetingDetailPage';
-import { DesktopAssistantHost } from './desktop/DesktopAssistantHost';
-import { AssistantWindowBridgeProvider, isAssistantWindow } from './desktop/assistantBridge';
-import { FloatingAssistantWidget } from './components/assistant/FloatingAssistantWidget';
 
 export const App: React.FC = () => {
-  if (isAssistantWindow()) {
-    return (
-      <BrowserRouter>
-        <AssistantWindowBridgeProvider>
-          <FloatingAssistantWidget />
-        </AssistantWindowBridgeProvider>
-      </BrowserRouter>
-    );
-  }
-
   return (
     <BrowserRouter>
       <AuthProvider>
         <MeetingProvider>
-          <DesktopAssistantHost />
           <Routes>
             {/* Startup Splash Logo Screen */}
             <Route path="/" element={<SplashPage />} />

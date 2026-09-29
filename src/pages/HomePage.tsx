@@ -244,7 +244,7 @@ export const HomePage: React.FC = () => {
             </span>
           </div>
           <p className="text-slate-600 text-[11.5px] leading-relaxed">
-            The assistant opens in a separate OS-level desktop window visible to you. To ensure meeting participants cannot see the assistant while you share your screen, follow this supported sharing rule:
+            The assistant runs in its own floating window on top of your browser — a Document Picture-in-Picture window on Chrome/Edge, otherwise it stays docked in this page. To keep the assistant out of what meeting participants see, follow this supported sharing rule:
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1 text-[11px]">
             <div className="p-2.5 rounded-xl bg-white border border-emerald-200 flex items-start gap-2 shadow-xs">
@@ -252,7 +252,7 @@ export const HomePage: React.FC = () => {
               <div>
                 <span className="font-semibold text-slate-900">Browser Tab / Application Window:</span>
                 <p className="text-slate-600 mt-0.5">
-                  Choose a specific <strong>Browser Tab</strong> or <strong>Application Window</strong> in Zoom, Meet, or Teams. The separate MEETX assistant window is outside that selected capture boundary.
+                  Share a specific <strong>Browser Tab</strong> (for example the Zoom, Meet or Teams tab) or the meeting app's <strong>Application Window</strong> (Zoom or Teams desktop app). A tab share never includes the floating assistant, and an application-window share only captures that app.
                 </p>
               </div>
             </div>
@@ -261,7 +261,7 @@ export const HomePage: React.FC = () => {
               <div>
                 <span className="font-semibold text-amber-900">Entire Screen:</span>
                 <p className="text-amber-800 mt-0.5">
-                  <strong>Private Mode cannot hide the assistant during Entire Screen sharing. Please share the meeting tab or application window.</strong> MEETX cannot inspect a share started in a separate meeting app, so it cannot detect this automatically.
+                  <strong>Private Mode cannot hide the assistant during Entire Screen sharing — no web page can.</strong> Share the meeting tab or the meeting application window instead. MEETX cannot inspect a share started in another app, so it cannot detect this automatically.
                 </p>
               </div>
             </div>

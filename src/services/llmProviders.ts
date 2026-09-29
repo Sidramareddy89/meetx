@@ -399,7 +399,7 @@ export async function callGemini(
           signal: controller.signal,
           body: JSON.stringify({
             contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-            generationConfig: { maxOutputTokens: 1024, temperature: 0.3 },
+            generationConfig: { maxOutputTokens: 2048, temperature: 0.3 },
           }),
         }
       );
@@ -495,7 +495,7 @@ export async function callGroq(
             },
             { role: 'user', content: fullPrompt },
           ],
-          max_tokens: 1024,
+          max_tokens: 2048,
           ...(model.includes('gpt-oss') ? { reasoning_effort: 'low' } : {}),
           temperature: 0.3,
         }),

@@ -45,6 +45,7 @@ export const setDoc = async (target, data, options) => {
 };
 export const getDoc = async () => ({ exists: () => false, data: () => undefined });
 export const getDocs = async () => ({ forEach: () => {} });
+export const onSnapshot = () => () => {};
 export const deleteDoc = async (target) => {
   calls().push({ fn: 'deleteDoc', path: target && target.path });
 };

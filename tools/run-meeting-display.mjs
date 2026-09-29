@@ -71,6 +71,7 @@ export const getDocs = async (q) => {
   }
   return { forEach: (cb) => list.forEach(cb), docs: () => list };
 };
+export const onSnapshot = () => () => {};
 export const deleteDoc = async (ref) => { store().delete(ref.path); };
 export const ref = (_storage, path) => ({ path });
 export const uploadBytes = async (target) => ({ ref: target });

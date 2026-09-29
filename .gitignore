@@ -14,12 +14,11 @@ tsc_check.txt
 
 # dev / tunnel logs
 *.log
-dev.log
-dev-err.log
-tunnel.log
-tunnel-err.log
 build.out.log
 build.err.log
+
+# transient harness bundles (created and deleted by tools/run-*.mjs)
+tools/.*.tmp.mjs
 
 # editor / OS
 .vscode/

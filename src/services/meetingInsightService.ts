@@ -8,7 +8,9 @@ import { Meeting, MeetingSummary, MeetingTranscriptEntry, getLanguageDisplayName
  */
 
 const ACTION_PATTERNS =
-    /\b(action item|to-do|follow ?up|deadline|due|next step|we need to|i need to|you need to|we should|need to (do|deliver|send|update|test|fix)|will (be )?(sending|delivering|updating|following up))\b/i;
+    /(\b(action item|to-do|follow ?up|deadline|due|next step|we need to|i need to|you need to|we should|need to (do|deliver|send|update|test|fix)|will (be )?(sending|delivering|updating|following up))\b|\b(hay que|debemos|necesitamos|me encargo|se encargará|tarea|seguimiento|fecha límite|para el)\b|\b(il faut|nous devons|je vais|à faire|suivi|date limite|avant le)\b|\b(wir müssen|ich werde|aufgabe|nachverfolgen|frist|bis zum)\b|(?:करना होगा|जिम्मेदारी|समय सीमा|भेजेंगे|करेंगे)|(?:必要|担当|までに|してください|します)|(?:需要|负责|截止|跟进|安排))/iu;
+
+const hasActionCue = (text: string): boolean => ACTION_PATTERNS.test(text);
 
 export function buildSummaryFromTranscript(
     meeting: Meeting,
@@ -41,7 +43,7 @@ export function buildSummaryFromTranscript(
 
     // ---- Actions: only entries whose real content signals work items ----
     const actions = entries
-        .filter((e) => ACTION_PATTERNS.test(e.text))
+        .filter((e) => hasActionCue(e.text))
         .slice(0, 5)
         .map((e) => e.text.trim());
 
@@ -226,8 +228,8 @@ export interface LiveBrief {
 }
 
 const ACTION_VERBS =
-  /\b(will|shall|must|need to|needs to|should|going to|action item|to-?do|follow ?up|send|share|deliver|submit|prepare|schedule|call|email|review|update|fix|test|deploy|deadline|due|by (monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|eod|end of (day|week))|\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?)\b/i;
-const QUESTION_RE = /\?\s*$/;
+  /(\b(will|shall|must|need to|needs to|should|going to|action item|to-?do|follow ?up|send|share|deliver|submit|prepare|schedule|call|email|review|update|fix|test|deploy|deadline|due|by (monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|eod|end of (day|week))|\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?)\b|\b(hay que|debemos|necesitamos|me encargo|se encargará|tarea|seguimiento|fecha límite|para el)\b|\b(il faut|nous devons|je vais|à faire|suivi|date limite|avant le)\b|\b(wir müssen|ich werde|aufgabe|nachverfolgen|frist|bis zum)\b|(?:करना होगा|जिम्मेदारी|समय सीमा|भेजेंगे|करेंगे)|(?:必要|担当|までに|してください|します)|(?:需要|负责|截止|跟进|安排)|\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/iu;
+const QUESTION_RE = /[?？]\s*$/u;
 const NAME_PREFIX = /^([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*[:\-–]\s*(.+)$/;
 
 /** Split transcript lines into per-speaker turns, detecting "Name: ..." prefixes. */
@@ -263,13 +265,13 @@ export function groupTranscriptBySpeaker(
 }
 
 const extractAssignee = (text: string): string | undefined => {
-  const m = text.match(/\b([A-Z][a-z]+)\s+(will|shall|should|must|needs?\s+to|is\s+going\s+to)\b/);
+  const m = text.match(/\b([A-Z][a-z]+)\s+(will|shall|should|must|needs?\s+to|is\s+going\s+to|is responsible for|owns)\b/u);
   return m ? m[1] : undefined;
 };
 
 const extractDueDate = (text: string): string | undefined => {
   const m = text.match(
-    /\b(by|due|before|deadline:?)\s+([A-Z][a-z]+day|tomorrow|today|next week|EOD|end of (day|week)|\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?)/i
+    /(\b(by|due|before|deadline:?|hasta|para el|antes del|d'ici|avant(?: le)?|bis|spätestens am)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|next week|lunes|martes|miércoles|jueves|viernes|sábado|domingo|mañana|hoy|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|demain|heute|morgen|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|nächste woche|EOD|end of (day|week)|\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?)|(?:(?:सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार|कल|आज|अगले सप्ताह)\s*(?:तक|से पहले)|(?:तक|से पहले)\s*(?:सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार|कल|आज|अगले सप्ताह))|(?:までに|截止于|截止到)\s*[\p{L}\d年月日\/\-]+)/iu
   );
   return m ? m[0] : undefined;
 };
@@ -324,7 +326,7 @@ export function buildLiveBrief(
     const text = e.text.trim().slice(0, 220);
     const due = extractDueDate(e.text);
     const assignee = extractAssignee(e.text);
-    const isDeadline = /\b(deadline|due by|by (monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|eod|end of (day|week)))\b/i.test(e.text);
+    const isDeadline = /(?:\b(deadline|due by|by (monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|eod|end of (day|week))|fecha límite|date limite|frist|bis zum)\b|(?:तक|से पहले|सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार|समय सीमा|までに|截止于|截止到))/iu.test(e.text);
 
     if (actions.length < 20) {
       actions.push({
