@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, LogIn } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { describeGoogleAuthError } from '../../services/googleAuthErrors';
 
 export const SignInPage: React.FC = () => {
   const navigate = useNavigate();
@@ -20,7 +21,7 @@ export const SignInPage: React.FC = () => {
       await signInWithGoogle();
       navigate('/home', { replace: true });
     } catch (err: any) {
-      setError(err?.message || 'Google sign-in was cancelled or failed.');
+      setError(describeGoogleAuthError(err, 'Google sign-in was cancelled or failed.'));
     } finally {
       setGoogleLoading(false);
     }

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Loader2, Sparkles, Mail, Lock, User, AlertCircle, CheckCircle } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { describeGoogleAuthError } from '../../services/googleAuthErrors';
 import { isFirebaseConfigured } from '../../config/firebase';
 
 export const SignUpPage: React.FC = () => {
@@ -23,7 +24,7 @@ export const SignUpPage: React.FC = () => {
       await signInWithGoogle();
       navigate('/home', { replace: true });
     } catch (err: any) {
-      setError(err?.message || 'Google registration was cancelled or failed.');
+      setError(describeGoogleAuthError(err, 'Google registration was cancelled or failed.'));
     } finally {
       setGoogleLoading(false);
     }
