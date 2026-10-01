@@ -20,7 +20,12 @@ export const describeGoogleAuthError = (err: any, fallback: string): string => {
     case 'auth/cancelled-popup-request':
       return 'The Google sign-in window was closed before finishing. Please try again.';
     case 'auth/popup-blocked':
-      return 'Your browser blocked the Google sign-in popup. Allow pop-ups for this site and try again.';
+      // Misleading on its own: Firebase also reports "popup-blocked" when the
+      // popup DID open but the OAuth page inside it failed (for example the
+      // deleted-client screen). Telling someone to allow pop-ups when the
+      // popup is plainly visible just sends them down the wrong path, so name
+      // both causes and let the visible Google error decide.
+      return 'The Google sign-in window could not complete. If no window appeared, allow pop-ups for this site. If you saw a Google error page inside the window, the cause is this: the Google OAuth client for this app was deleted - recreate it in Google Cloud Console > APIs & Services > Credentials, or set a Web client ID in Firebase Console > Authentication > Sign-in method > Google. Use email/password below in the meantime.';
     case 'auth/network-request-failed':
       return 'Network error during Google sign-in. Check your connection and try again.';
     case 'auth/api-key-not-valid':
