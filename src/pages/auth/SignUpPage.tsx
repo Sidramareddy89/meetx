@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Loader2, Sparkles, Mail, Lock, User, AlertCircle, CheckCircle } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { describeGoogleAuthError } from '../../services/googleAuthErrors';
+import { describeAuthError, validateEmail, validatePassword, validateName } from '../../services/authErrors';
 import { isFirebaseConfigured } from '../../config/firebase';
 
 export const SignUpPage: React.FC = () => {
@@ -23,8 +23,8 @@ export const SignUpPage: React.FC = () => {
       setGoogleLoading(true);
       await signInWithGoogle();
       navigate('/home', { replace: true });
-    } catch (err: any) {
-      setError(describeGoogleAuthError(err, 'Google registration was cancelled or failed.'));
+    } catch (err) {
+      setError(describeAuthError(err, 'google'));
     } finally {
       setGoogleLoading(false);
     }
@@ -34,40 +34,36 @@ export const SignUpPage: React.FC = () => {
     e.preventDefault();
     setError(null);
 
-    if (!displayName.trim()) {
-      setError('Please enter your full name');
+    // Shared validators keep the rules identical across all auth forms.
+    const nameError = validateName(displayName);
+    if (nameError) {
+      setError(nameError);
       return;
     }
-    if (!email.trim() || !email.includes('@')) {
-      setError('Please enter a valid email address');
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setError(emailError);
       return;
     }
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
     if (password !== confirmPassword) {
-      setError('Passwords do not match');
+      setError('Passwords do not match.');
       return;
     }
 
     try {
       setLoading(true);
-      await register(email, password, displayName);
-      // As requested: Once registered, navigate directly to Home Page
+      await register(email.trim(), password, displayName.trim());
+      // Once registered, go straight to Home Page.
       navigate('/home', { replace: true });
-    } catch (err: any) {
-      let msg = 'Failed to complete registration. Please try again.';
-      if (err?.code === 'auth/email-already-in-use') {
-        msg = 'An account with this email address already exists. Please sign in.';
-      } else if (err?.code === 'auth/invalid-email') {
-        msg = 'The email address is not valid.';
-      } else if (err?.code === 'auth/weak-password') {
-        msg = 'Password is too weak. Please use at least 6 characters.';
-      } else if (err?.message) {
-        msg = err.message;
-      }
-      setError(msg);
+    } catch (err) {
+      // Duplicate accounts (auth/email-already-in-use) and every other Firebase
+      // code are mapped to a user-facing sentence here.
+      setError(describeAuthError(err, 'signup'));
     } finally {
       setLoading(false);
     }
@@ -147,7 +143,9 @@ export const SignUpPage: React.FC = () => {
           <div className="mb-4 p-3 rounded-xl bg-blue-950/60 border border-blue-800/60 text-blue-300 text-xs flex items-start gap-2">
             <Sparkles className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
             <span>
-              <strong>Local Mode:</strong> Firebase keys are using default placeholder. Local account creation will proceed seamlessly.
+              <strong>Sign-up unavailable:</strong> Firebase is not configured for this build, so
+              accounts cannot be created yet. An administrator must add the Firebase web
+              configuration before registration will work.
             </span>
           </div>
         )}

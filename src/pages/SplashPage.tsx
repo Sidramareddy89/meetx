@@ -6,10 +6,15 @@ import { MeetXLogo } from '../components/common/MeetXLogo';
 
 export const SplashPage: React.FC = () => {
   const navigate = useNavigate();
-  const { isRegisteredUser, currentUser, loading } = useAuth();
+  // Firebase Auth is the only signal that matters here.
+  const { currentUser, loading } = useAuth();
   const [platformLoadingProgress, setPlatformLoadingProgress] = useState(20);
 
-  const isUserRegistered = isRegisteredUser || Boolean(currentUser);
+  // Derived from Firebase alone: a restored session routes to Home, and a
+  // visitor with no session sees the overview. The retired `meetx_user_registered`
+  // local flag could claim a user was "registered" while Firebase had no
+  // session, which sent them to /signin incorrectly.
+  const isUserRegistered = Boolean(currentUser);
 
   useEffect(() => {
     if (loading) return;
@@ -30,24 +35,8 @@ export const SplashPage: React.FC = () => {
       }, 300);
 
       return () => clearInterval(interval);
-    } else if (isRegisteredUser) {
-      // Registered user returning without active session: platform loading -> Sign In
-      const interval = setInterval(() => {
-        setPlatformLoadingProgress((prev) => {
-          if (prev >= 100) {
-            clearInterval(interval);
-            setTimeout(() => {
-              navigate('/signin', { replace: true });
-            }, 300);
-            return 100;
-          }
-          return prev + 25;
-        });
-      }, 300);
-
-      return () => clearInterval(interval);
     }
-  }, [currentUser, isRegisteredUser, loading, navigate]);
+  }, [currentUser, loading, navigate]);
 
   const handleScrollToLanding = () => {
     navigate('/landing');

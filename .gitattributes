@@ -1,0 +1,17 @@
+# MEETX — line-ending policy.
+#
+# Without this file the repository mixes CRLF (written by Git's autocrlf on
+# checkout) with LF (written by the Node tooling in tools/), which is what
+# produced files with MIXED endings. Pinning every text file to LF keeps the
+# working tree, the index and CI identical on Windows, macOS and Linux.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary

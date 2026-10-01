@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, LogIn } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { describeGoogleAuthError } from '../../services/googleAuthErrors';
+import { describeAuthError, validateEmail } from '../../services/authErrors';
 
 export const SignInPage: React.FC = () => {
   const navigate = useNavigate();
@@ -20,8 +20,8 @@ export const SignInPage: React.FC = () => {
       setGoogleLoading(true);
       await signInWithGoogle();
       navigate('/home', { replace: true });
-    } catch (err: any) {
-      setError(describeGoogleAuthError(err, 'Google sign-in was cancelled or failed.'));
+    } catch (err) {
+      setError(describeAuthError(err, 'google'));
     } finally {
       setGoogleLoading(false);
     }
@@ -31,39 +31,25 @@ export const SignInPage: React.FC = () => {
     e.preventDefault();
     setError(null);
 
-    if (!email.trim()) {
-      setError('Please enter your email');
+    // Shared validators keep the rules identical across all auth forms.
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setError(emailError);
       return;
     }
     if (!password) {
-      setError('Please enter your password');
+      setError('Please enter your password.');
       return;
     }
 
     try {
       setLoading(true);
-      await login(email, password);
+      await login(email.trim(), password);
       navigate('/home', { replace: true });
-    } catch (err: any) {
-      let msg = 'Invalid email or password. Please try again.';
-      if (err?.code === 'auth/user-not-found') {
-        msg = 'No user found with this email address. Please register first.';
-      } else if (err?.code === 'auth/wrong-password') {
-        msg = 'Incorrect password. Please verify your password or reset it.';
-      } else if (err?.code === 'auth/invalid-credential') {
-        msg = 'Invalid credentials. New here? Please Register first (no account exists yet), or double-check email+password.';
-      } else if (err?.code === 'auth/too-many-requests') {
-        msg = 'Access temporarily disabled due to multiple failed attempts. Please try again later.';
-      } else if (err?.code === 'auth/operation-not-allowed') {
-        msg = 'Email/password sign-in is OFF in Firebase Console > Authentication > Sign-in method. Enable Email/Password there.';
-      } else if (err?.code === 'auth/unauthorized-domain') {
-        msg = 'localhost is not authorized in Firebase Console > Authentication > Settings > Authorized domains. Add localhost.';
-      } else if (err?.code === 'auth/api-key-not-valid') {
-        msg = 'Firebase API key invalid. Verify VITE_FIREBASE_API_KEY in .env and restart npm run dev.';
-      } else if (err?.message) {
-        msg = err.message;
-      }
-      setError(msg);
+    } catch (err) {
+      // describeAuthError maps every Firebase code to a user-facing sentence and
+      // never returns raw internal error text.
+      setError(describeAuthError(err, 'signin'));
     } finally {
       setLoading(false);
     }

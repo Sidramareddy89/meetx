@@ -21,6 +21,7 @@ const live = process.argv.includes('--live');
 const steps = [
   ['encoding hygiene guard', ['tools/encoding-hygiene.test.mjs']],
   ['web-only architecture guard', ['tools/web-only-architecture.test.mjs']],
+  ['auth architecture guard', ['tools/auth-architecture.test.mjs']],
   ['floating-window lifecycle', ['tools/run-floating-window-lifecycle.mjs']],
   ['widget realtime flow', ['tools/run-widget-realtime-flow.mjs']],
   ['meeting data lifecycle', ['tools/run-meeting-data-lifecycle.mjs']],

@@ -16,17 +16,16 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { auth, db, isFirebaseConfigured } from '../config/firebase';
 import { UserProfile } from '../types/user';
+import { toAuthFlowError } from '../services/authErrors';
 
 interface AuthContextType {
   currentUser: UserProfile | null;
   loading: boolean;
-  isRegisteredUser: boolean;
   register: (email: string, password: string, displayName: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
-  setIsRegisteredUser: (val: boolean) => void;
   loadUserProfile: (uid: string) => Promise<UserProfile | null>;
   updateUserProfile: (updates: { displayName?: string; phoneNumber?: string | null }) => Promise<void>;
 }
@@ -38,6 +37,25 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // database, or a denied security rule must not stall sign-in/registration.
 // The write is raced against a timeout and every failure is only logged.
 const PROFILE_WRITE_TIMEOUT_MS = 8000;
+
+/**
+ * Browser-local keys retired from earlier auth designs. Firebase Auth now owns
+ * "who is signed in"; these are only referenced so they can be cleaned up from
+ * browsers that still carry them.
+ *
+ * Deliberately NOT cleared on sign-out: the user's own DATA (`meetx_meetings_<uid>`)
+ * and device UI preferences (`meetx_widget_position`). Signing out must not
+ * delete a user's saved meetings, and it must not reset their widget layout.
+ */
+const RETIRED_SESSION_KEYS = ['meetx_user_registered'];
+
+const clearRetiredSessionKeys = (): void => {
+  try {
+    for (const key of RETIRED_SESSION_KEYS) localStorage.removeItem(key);
+  } catch {
+    // Storage unavailable (private mode / blocked): nothing to clear.
+  }
+};
 
 const saveUserProfileBestEffort = (uid: string, data: Record<string, unknown>): void => {
   const timeout = new Promise<never>((_, reject) => {
@@ -85,25 +103,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
   const [loading, setLoading] = useState<boolean>(true);
-  const [isRegisteredUser, setIsRegisteredUserState] = useState<boolean>(() => {
-    return localStorage.getItem('meetx_user_registered') === 'true';
-  });
 
-  const setIsRegisteredUser = (val: boolean) => {
-    setIsRegisteredUserState(val);
-    if (val) {
-      localStorage.setItem('meetx_user_registered', 'true');
-    } else {
-      localStorage.removeItem('meetx_user_registered');
-    }
-  };
-
+  // Firebase Auth is the ONLY source of truth for "is this person signed in".
+  // The previous `meetx_user_registered` localStorage flag duplicated that
+  // state and could disagree with Firebase (a stale flag sent a signed-out
+  // visitor to /signin, and clearing site data logged a live user out of the
+  // splash flow). It is gone on purpose.
   const applyAuthenticatedUser = async (user: User): Promise<void> => {
     const profile = await loadUserProfileDoc(user);
     setCurrentUser(profile);
-    setIsRegisteredUser(true);
   };
 
+  // ONE auth-state listener for the whole application (registered here, in the
+  // single AuthProvider). `browserLocalPersistence` is requested BEFORE the
+  // listener is attached, so a restored session is picked up by that listener
+  // rather than being missed.
   useEffect(() => {
     let cancelled = false;
     let unsubscribeAuth: (() => void) | undefined;
@@ -120,8 +134,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (user) {
           await applyAuthenticatedUser(user);
         } else {
+          // Signed out (or session expired/revoked): Firebase is authoritative.
           setCurrentUser(null);
-          setIsRegisteredUser(false);
+          clearRetiredSessionKeys();
         }
         setLoading(false);
       });
@@ -135,74 +150,93 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const register = async (email: string, password: string, displayName: string) => {
-    // 1. Create authenticated Firebase user
-    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-    const user = userCredential.user;
+    // Wrap every failure so the page can show a friendly, actionable message
+    // and can never surface raw Firebase text.
+    try {
+      // 1. Create the authenticated Firebase user.
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
 
-    // 2. Update Firebase auth profile
-    if (displayName && user) {
-      await updateProfile(user, { displayName });
+      // 2. Update the Firebase Auth profile.
+      if (displayName && user) {
+        await updateProfile(user, { displayName });
+      }
+
+      // 3. Store the profile document (best-effort: never blocks registration
+      //    if Firestore is unreachable or the write is denied).
+      saveUserProfileBestEffort(user.uid, {
+        uid: user.uid,
+        displayName: displayName || email.split('@')[0],
+        email: user.email,
+        hasCompletedOnboarding: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const profile: UserProfile = {
+        uid: user.uid,
+        email: user.email,
+        displayName: displayName || user.email?.split('@')[0] || 'User',
+        photoURL: user.photoURL,
+        phoneNumber: null,
+        hasCompletedOnboarding: true,
+      };
+      setCurrentUser(profile);
+    } catch (err) {
+      throw toAuthFlowError(err, 'signup');
     }
-
-    // 3. Store the user's profile document in Firestore (best-effort: never
-    // blocks registration if Firestore is unreachable or the write is denied).
-    saveUserProfileBestEffort(user.uid, {
-      uid: user.uid,
-      displayName: displayName || email.split('@')[0],
-      email: user.email,
-      hasCompletedOnboarding: true,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    const profile: UserProfile = {
-      uid: user.uid,
-      email: user.email,
-      displayName: displayName || user.email?.split('@')[0] || 'User',
-      photoURL: user.photoURL,
-      phoneNumber: null,
-      hasCompletedOnboarding: true,
-    };
-    setCurrentUser(profile);
-    setIsRegisteredUser(true);
   };
 
   const login = async (email: string, password: string) => {
-    const userCredential = await signInWithEmailAndPassword(auth, email, password);
-    const user = userCredential.user;
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
 
-    const profile = await loadUserProfileDoc(user);
-    setCurrentUser(profile);
-    setIsRegisteredUser(true);
+      const profile = await loadUserProfileDoc(user);
+      setCurrentUser(profile);
+    } catch (err) {
+      throw toAuthFlowError(err, 'signin');
+    }
   };
 
   const signInWithGoogle = async () => {
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' });
-    const userCredential = await signInWithPopup(auth, provider);
-    const user = userCredential.user;
+    try {
+      // Firebase WEB Authentication only: the OAuth client is resolved
+      // server-side by Google from the project's authDomain. There is no
+      // Tauri/native window, no loopback callback, no desktop client id and
+      // no client secret anywhere in this flow.
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const userCredential = await signInWithPopup(auth, provider);
+      const user = userCredential.user;
 
-    if (user) {
-      // Complete sign-in state first (with any stored profile fields), then
-      // persist our copy in the background. The previously awaited Firestore
-      // write stalled the Google button spinner whenever Firestore was slow,
-      // blocked, or denied.
-      const profile = await loadUserProfileDoc(user);
-      setCurrentUser(profile);
-      setIsRegisteredUser(true);
+      if (user) {
+        // Complete sign-in state first (with any stored profile fields), then
+        // persist our copy in the background. Awaiting the Firestore write here
+        // used to stall the Google button spinner whenever Firestore was slow,
+        // blocked, or denied.
+        const profile = await loadUserProfileDoc(user);
+        setCurrentUser(profile);
 
-      saveUserProfileBestEffort(user.uid, {
-        uid: user.uid,
-        displayName: profile.displayName,
-        email: user.email,
-        photoURL: user.photoURL || null,
-        lastLoginAt: serverTimestamp(),
-      });
+        saveUserProfileBestEffort(user.uid, {
+          uid: user.uid,
+          displayName: profile.displayName,
+          email: user.email,
+          photoURL: user.photoURL || null,
+          lastLoginAt: serverTimestamp(),
+        });
+      }
+    } catch (err) {
+      throw toAuthFlowError(err, 'google');
     }
   };
 
   const resetPassword = async (email: string) => {
-    await sendPasswordResetEmail(auth, email);
+    try {
+      await sendPasswordResetEmail(auth, email);
+    } catch (err) {
+      throw toAuthFlowError(err, 'reset');
+    }
   };
 
   // Read the stored Firestore profile for a uid (merged over Auth data).
@@ -230,34 +264,52 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const phoneNumber = (updates.phoneNumber ?? '').trim();
 
     await updateProfile(user, { displayName });
-    await setDoc(
-      doc(db, 'users', user.uid),
-      {
-        uid: user.uid,
-        displayName,
-        phoneNumber: phoneNumber || null,
-        hasCompletedOnboarding: true,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+    try {
+      await setDoc(
+        doc(db, 'users', user.uid),
+        {
+          uid: user.uid,
+          displayName,
+          phoneNumber: phoneNumber || null,
+          hasCompletedOnboarding: true,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      // Never surface a raw Firestore error; the page shows err.message.
+      throw toAuthFlowError(err, 'profile');
+    }
 
     const refreshed = await loadUserProfileDoc(user);
     setCurrentUser(refreshed);
-    setIsRegisteredUser(true);
   };
 
+  /**
+   * Sign out and clear the application's session state.
+   *
+   * Firebase sees the sign-out first (it also fires `onAuthStateChanged`, which
+   * is what resets the meeting session in MeetingContext). `setCurrentUser(null)`
+   * is applied immediately afterwards so the UI cannot render an authenticated
+   * view for a frame after the call resolves, even when Firebase is
+   * unconfigured (local/demo mode) and there is nothing to sign out of.
+   *
+   * The user's own DATA is intentionally left intact: `meetx_meetings_<uid>`
+   * keyed records belong to that account and must still be there on next login.
+   */
   const logout = async () => {
-    if (isFirebaseConfigured()) {
-      await fbSignOut(auth);
+    try {
+      if (isFirebaseConfigured()) {
+        await fbSignOut(auth);
+      }
+    } finally {
+      clearRetiredSessionKeys();
+      setCurrentUser(null);
     }
-    localStorage.removeItem('meetx_user_registered');
-    setCurrentUser(null);
-    setIsRegisteredUserState(false);
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, loading, isRegisteredUser, register, login, signInWithGoogle, resetPassword, logout, setIsRegisteredUser, loadUserProfile, updateUserProfile }}>
+    <AuthContext.Provider value={{ currentUser, loading, register, login, signInWithGoogle, resetPassword, logout, loadUserProfile, updateUserProfile }}>
       {children}
     </AuthContext.Provider>
   );

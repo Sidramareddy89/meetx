@@ -661,6 +661,57 @@ export const MeetingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Sign-out clears the application's live session.
+   *
+   * A running meeting exists only in memory (active meeting, live transcript,
+   * assistant conversation, floating widget). Without this, the next person to
+   * sign in on the same browser would inherit the previous user's on-screen
+   * meeting. Only a genuine sign-OUT transition (a uid that becomes null)
+   * resets: the first hydration after mount is skipped, so a restored session
+   * is never wiped, and switching between two signed-in accounts is untouched.
+   */
+  const previousUidRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const uid = currentUser?.uid ?? null;
+    const previous = previousUidRef.current;
+    previousUidRef.current = uid;
+
+    if (previous === undefined) return; // first hydration after mount
+    if (!previous) return; // already signed out
+    if (uid !== null) return; // still signed in (or a different account)
+
+    // Flush the outgoing user's pending remarks against THEIR record before the
+    // session is dropped, so signing out cannot lose the last spoken lines.
+    if (activeMeetingRef.current?.id) {
+      if (transcriptSaveTimer.current) {
+        window.clearTimeout(transcriptSaveTimer.current);
+        transcriptSaveTimer.current = null;
+      }
+      void flushTranscriptNow('live');
+    }
+    if (briefTimer.current) {
+      window.clearTimeout(briefTimer.current);
+      briefTimer.current = null;
+    }
+
+    activeMeetingRef.current = null;
+    sessionBaseTranscriptRef.current = [];
+    sessionTranscriptRef.current = [];
+    setActiveMeeting(null);
+    setLiveTranscript([]);
+    setAssistantMessages([]);
+    setLiveBrief(null);
+    setCheckedActions(new Set());
+    setIsFloatingActive(false);
+    setIsPlatformClosed(false);
+    setIsPlanModalOpen(false);
+    setIsEntireScreenShareReported(false);
+    setSearchQuery('');
+    // Runs on uid changes only; every value used is a state setter or a ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.uid]);
+
   return (
     <MeetingContext.Provider
       value={{

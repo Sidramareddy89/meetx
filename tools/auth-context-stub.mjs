@@ -10,7 +10,6 @@ export const useAuth = () => {
   return {
     currentUser: auth.currentUser || null,
     loading: false,
-    isRegisteredUser: true,
     register: async () => {},
     login: async () => {},
     signInWithGoogle: async () => {},
@@ -18,7 +17,6 @@ export const useAuth = () => {
     logout: async () => {
       if (auth) auth.currentUser = null;
     },
-    setIsRegisteredUser: () => {},
     loadUserProfile: async () => auth.currentUser || null,
     updateUserProfile: async () => {},
   };

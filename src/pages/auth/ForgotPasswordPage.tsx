@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Mail, Loader2, CheckCircle2, AlertCircle, Send } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { describeAuthError, validateEmail } from '../../services/authErrors';
 
 export const ForgotPasswordPage: React.FC = () => {
   const navigate = useNavigate();
@@ -16,17 +17,19 @@ export const ForgotPasswordPage: React.FC = () => {
     e.preventDefault();
     setError(null);
 
-    if (!email.trim() || !email.includes('@')) {
-      setError('Please enter a valid email address');
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setError(emailError);
       return;
     }
 
     try {
       setLoading(true);
-      await resetPassword(email);
+      await resetPassword(email.trim());
       setSubmitted(true);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to send password reset email. Please try again.');
+    } catch (err) {
+      // Never surface the raw Firebase message; map it like the other forms.
+      setError(describeAuthError(err, 'reset'));
     } finally {
       setLoading(false);
     }

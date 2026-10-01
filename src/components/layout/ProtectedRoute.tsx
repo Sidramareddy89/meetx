@@ -4,7 +4,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { Loader2 } from 'lucide-react';
 
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { currentUser, isRegisteredUser, loading } = useAuth();
+  // Firebase Auth (via AuthProvider) is the single source of truth for access.
+  const { currentUser, loading } = useAuth();
 
   if (loading) {
     return (
